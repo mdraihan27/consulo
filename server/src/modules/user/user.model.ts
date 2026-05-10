@@ -5,6 +5,7 @@ class User{
     lastName:string;
     email:string;
     username:string;
+    password:string;
     role:string;
     isVerified:boolean;
     bio:string;
@@ -18,8 +19,9 @@ class User{
         role:string, 
         isVerified:boolean, 
         bio:string, 
-        profilePicture:string){
-            
+        profilePicture:string,
+        password:string){
+
         this.id = id;
         this.firstName = firstName;
         this.lastName = lastName;
@@ -28,7 +30,10 @@ class User{
         this.role = role;
         this.isVerified = isVerified;
         this.bio = bio;
+        this.password = password;
         this.profilePicture = profilePicture;
     }
 
 }
+
+export {User};

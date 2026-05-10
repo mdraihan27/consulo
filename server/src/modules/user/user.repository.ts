@@ -1,4 +1,5 @@
 import { pool } from "../../config/db.ts";
+import { User } from "./user.model.ts";
 
 class UserRepository{
     createUser(user:User){
@@ -45,3 +46,5 @@ class UserRepository{
         return result;
     }
 }
+
+export {UserRepository};
