@@ -40,6 +40,41 @@ class UserController {
 			next(error);
 		}
 	}
+
+	async updateUser(req: Request, res: Response, next: NextFunction) {
+		try {
+			if(process.env.ENVIRONMENT === "dev"){
+				console.log("Request Body:", req.body);
+			}
+			const body = req.body || {};
+
+			const user = new User(
+				body.id,
+				body.firstName,
+				body.lastName,
+				"",
+				"",
+				body.role,
+				false,
+				body.bio ?? "",
+				body.profilePicture ?? "",
+				""
+			);
+
+			const result = await this.userService.updateUser(user);
+
+			res.status(200).json({
+				success: true,
+				message: "User updated successfully",
+				data: result
+			});
+
+
+		} catch (error) {
+			next(error);
+		}
+
+	}
 }
 
 export { UserController };

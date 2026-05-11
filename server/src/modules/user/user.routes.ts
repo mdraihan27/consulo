@@ -8,4 +8,8 @@ userRoutes.post("/user", (req, res, next) =>
 	userController.createUser(req, res, next)
 );
 
+userRoutes.put("/user", (req, res, next) =>
+	userController.updateUser(req, res, next)
+);
+
 export { userRoutes };

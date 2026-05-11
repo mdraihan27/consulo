@@ -23,7 +23,9 @@ class UserService{
             throw new ConsuloError(406, "Invalid email format");
         }
 
-        if(await this.userRepository.getUserByEmail(user.email)){
+        const existingUser = await this.userRepository.getUserByEmail(user.email);
+
+        if(existingUser){
             throw new ConsuloError(409, "Email already exists");
         }
 
@@ -52,6 +54,62 @@ class UserService{
         };
 
     }
+
+    async updateUser(user:User){
+        if(!user.id){
+            throw new ConsuloError(406, "User ID is required");
+        }
+
+        const existingUser = await this.userRepository.getUserById(user.id);
+
+        if(!existingUser){
+            throw new ConsuloError(404, "User not found");
+        }
+
+        user.email = existingUser.email;
+        user.username = existingUser.username;
+        user.password = existingUser.password;
+        user.isVerified = existingUser.isVerified;
+
+        if(!user.firstName){
+            user.firstName = existingUser.firstName;
+        }
+
+        if(!user.lastName){
+            user.lastName = existingUser.lastName;
+        }
+
+        if(!user.role){
+            user.role = existingUser.role;
+        }
+
+        if(user.role !== "freelancer" && user.role !== "client"){
+            throw new ConsuloError(406, "Role must be either freelancer or client");
+        }
+
+        if(!user.bio){
+            user.bio = existingUser.bio;
+        }
+
+        if(!user.profilePicture){
+            user.profilePicture = existingUser.profilePicture;
+        }
+
+        this.userRepository.updateUser(user);
+        return {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            role: user.role,
+            isVerified: user.isVerified,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            bio: user.bio,
+            profilePicture: user.profilePicture
+        };
+    }
+
+        
 
    
         
