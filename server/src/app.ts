@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import { ConsuloError } from "./utils/errorHandler";
+import { userRoutes } from "./modules/user/user.routes";
+import dotenv from "dotenv";
 
 const app = express();
 
@@ -13,22 +15,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(
-  (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error(err);
-    if (err instanceof ConsuloError) {
-      return res.status(err.statusCode).json({
-        success: false,
-        message: err.message
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Internal server error"
-    });
-  }
-);
 
 /*
 |--------------------------------------------------------------------------
@@ -41,6 +27,8 @@ app.get("/", (req, res) => {
     message: "Consulo Server is Up and Running..."
   });
 });
+
+app.use("/api/v1", userRoutes);
 
 /*
 |--------------------------------------------------------------------------
@@ -62,13 +50,17 @@ app.use((req, res) => {
 */
 
 app.use(
-  (
-    err: any,
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction
-  ) => {
-    console.error(err);
+  (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof ConsuloError) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message
+      });
+    }
+
+    if (process.env.ENVIRONMENT === "dev") {
+      console.error("Error:", err);
+    }
 
     res.status(500).json({
       success: false,
