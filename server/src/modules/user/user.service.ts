@@ -1,10 +1,46 @@
-
 import {UserRepository} from "./user.repository"
 import {User} from "./user.model";
 import {Regex} from "../../utils/regex";
 import { ConsuloError } from "../../utils/errorHandler";
 import { EncryptionHandler } from "../../utils/encryptionHandler";
 import { RandomGenerator } from "../../utils/randomGenerator";
+import { CloudinaryHandler } from "../../utils/cloudinaryHandler";
+import { AdminInviteService } from "../admin/adminInvite.service";
+import { ContractRepository } from "../contract/contract.repository";
+
+type PublicUser = {
+    id: string;
+    username: string;
+    email: string;
+    role: string | null;
+    isVerified: boolean;
+    firstName: string;
+    lastName: string;
+    bio?: string;
+    profilePicture?: string;
+    title?: string;
+    testScore?: number | null;
+    bookingsCount?: number;
+    certifications?: Array<{ id: string; name: string; url: string }>;
+};
+
+type GoogleProfile = {
+    email: string;
+    firstName: string;
+    lastName: string;
+    profilePicture?: string;
+};
+
+/** Every field is optional: omitted means "leave alone", "" means "clear". */
+type ProfilePatch = {
+    firstName?: string;
+    lastName?: string;
+    username?: string;
+    bio?: string;
+    title?: string;
+    profilePictureBase64?: string;
+    removeProfilePicture?: boolean;
+};
 
 class UserService{
     
@@ -12,50 +48,97 @@ class UserService{
     regex = new Regex();
     encryptionHandler = new EncryptionHandler();
     randomGenerator = new RandomGenerator();
+    adminInviteService = new AdminInviteService();
+    contractRepository = new ContractRepository();
 
-    async createUser(user:User){
+    private async toPublicUser(user: User): Promise<PublicUser> {
+        let title: string | undefined = undefined;
+        let testScore: number | null = null;
+        let bookingsCount = 0;
+        let certifications: Array<{ id: string; name: string; url: string }> = [];
 
-        if(!user.email || !user.password || !user.role){
-            throw new ConsuloError(406 ,"Email, username, category and password are required");
+        if (user.role === "freelancer") {
+            const profile = await this.userRepository.getFreelancerProfileByUserId(user.id);
+            if (profile) {
+                title = profile.title;
+                testScore = profile.test_score;
+            }
+            bookingsCount = await this.contractRepository.getContractsCountByUserId(user.id, "freelancer");
+            certifications = await this.userRepository.getCertificationsByUserId(user.id);
+        } else if (user.role === "client") {
+            bookingsCount = await this.contractRepository.getContractsCountByUserId(user.id, "client");
         }
 
-        if(!this.regex.isValidEmail(user.email)){
-            throw new ConsuloError(406, "Invalid email format");
-        }
-
-        const existingUser = await this.userRepository.getUserByEmail(user.email);
-
-        if(existingUser){
-            throw new ConsuloError(409, "Email already exists");
-        }
-
-        if(!this.regex.isValidPassword(user.password)){
-            throw new ConsuloError(406, "Password must be at least 8 characters long and include at least one uppercase letter, one lowercase letter, one number, and one special character");
-        }
-
-        if(user.role !== "freelancer" && user.role !== "client"){
-            throw new ConsuloError(406, "Role must be either admin, freelancer or client");
-        }
-
-        user.id = this.randomGenerator.generateRandomString(32);
-        user.username = this.randomGenerator.generateUserName(user.firstName, user.lastName);
-
-        user.password = await this.encryptionHandler.hashPassword(user.password);
-
-        this.userRepository.createUser(user);
         return {
             id: user.id,
             username: user.username,
             email: user.email,
-            role: user.role,
+            role: user.role ?? null,
             isVerified: user.isVerified,
             firstName: user.firstName,
-            lastName: user.lastName
+            lastName: user.lastName,
+            bio: user.bio,
+            profilePicture: user.profilePicture,
+            title,
+            testScore,
+            bookingsCount,
+            certifications
         };
-
     }
 
-    async updateUser(user:User){
+    async getOrCreateGoogleUser(profile: GoogleProfile): Promise<PublicUser> {
+		const email = (profile.email || "").trim();
+		if (!email || !this.regex.isValidEmail(email)) {
+			throw new ConsuloError(401, "Google authentication failed");
+		}
+
+		const existingUser = await this.userRepository.getUserByEmail(email);
+		if (existingUser) {
+			if (existingUser.isSuspended) {
+				throw new ConsuloError(403, "This account has been suspended. Contact support for assistance.");
+			}
+			if (existingUser.role !== "admin") {
+				const grantedRole = await this.adminInviteService.resolveRoleForNewLogin(email);
+				if (grantedRole === "admin") {
+					existingUser.role = "admin";
+					await this.userRepository.updateUser(existingUser);
+				}
+			}
+			return await this.toPublicUser(existingUser);
+		}
+
+		const firstName = (profile.firstName || "").trim();
+		const lastName = (profile.lastName || "").trim();
+		const grantedRole = await this.adminInviteService.resolveRoleForNewLogin(email);
+		const user = new User(
+			this.randomGenerator.generateRandomString(32),
+			firstName,
+			lastName,
+			email,
+			this.randomGenerator.generateUserName(firstName || "user", lastName || ""),
+			grantedRole ?? "user",
+			true,
+			"",
+			(profile.profilePicture || "").trim(),
+			await this.encryptionHandler.hashPassword(this.randomGenerator.generateRandomString(32))
+		);
+
+		await this.userRepository.createUser(user);
+		return await this.toPublicUser(user);
+	}
+
+    async getUserInfoById(id: string): Promise<PublicUser> {
+        if (!id) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+        const existingUser = await this.userRepository.getUserById(id);
+        if (!existingUser) {
+            throw new ConsuloError(404, "User not found");
+        }
+        return await this.toPublicUser(existingUser);
+    }
+
+    async updateUser(user:User, title?: string): Promise<PublicUser>{
         if(!user.id){
             throw new ConsuloError(406, "User ID is required");
         }
@@ -79,12 +162,16 @@ class UserService{
             user.lastName = existingUser.lastName;
         }
 
-        if(!user.role){
+        if(user.role === undefined){
             user.role = existingUser.role;
         }
 
-        if(user.role !== "freelancer" && user.role !== "client"){
-            throw new ConsuloError(406, "Role must be either freelancer or client");
+        if(existingUser.role === "admin"){
+            throw new ConsuloError(403, "Admin role cannot be changed through this endpoint");
+        }
+
+        if(user.role !== null && user.role !== "freelancer" && user.role !== "client" && user.role !== "user"){
+            throw new ConsuloError(406, "Role must be either freelancer, client, or user");
         }
 
         if(!user.bio){
@@ -95,24 +182,351 @@ class UserService{
             user.profilePicture = existingUser.profilePicture;
         }
 
-        this.userRepository.updateUser(user);
-        return {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            role: user.role,
-            isVerified: user.isVerified,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            bio: user.bio,
-            profilePicture: user.profilePicture
-        };
+        if (user.role === "freelancer" && title !== undefined) {
+            const existingProfile = await this.userRepository.getFreelancerProfileByUserId(user.id);
+            if (existingProfile) {
+                await this.userRepository.updateFreelancerProfileTitle(user.id, title);
+            } else {
+                await this.userRepository.createFreelancerProfile(
+                    this.randomGenerator.generateRandomString(32),
+                    user.id,
+                    title
+                );
+            }
+        }
+
+		await this.userRepository.updateUser(user);
+		return await this.toPublicUser(user);
     }
 
-        
+    /**
+     * Patch a user's own profile.
+     *
+     * Semantics are deliberately different from updateUser: a field left out is
+     * untouched, while an empty string clears it. That is what lets someone
+     * actually delete a bio or drop their avatar, which the falsy-fallback
+     * behaviour elsewhere makes impossible.
+     */
+    async updateProfile(userId: string, patch: ProfilePatch): Promise<PublicUser> {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
 
-   
+        const existingUser = await this.userRepository.getUserById(userId);
+        if (!existingUser) {
+            throw new ConsuloError(404, "User not found");
+        }
+
+        if (patch.firstName !== undefined) {
+            const firstName = String(patch.firstName).trim();
+            if (!firstName) throw new ConsuloError(400, "First name cannot be empty");
+            if (firstName.length > 60) throw new ConsuloError(400, "First name must be under 60 characters");
+            existingUser.firstName = firstName;
+        }
+
+        if (patch.lastName !== undefined) {
+            const lastName = String(patch.lastName).trim();
+            if (!lastName) throw new ConsuloError(400, "Last name cannot be empty");
+            if (lastName.length > 60) throw new ConsuloError(400, "Last name must be under 60 characters");
+            existingUser.lastName = lastName;
+        }
+
+        if (patch.username !== undefined) {
+            const username = String(patch.username).trim().toLowerCase();
+            if (username !== existingUser.username) {
+                if (!this.regex.isValidUsername(username)) {
+                    throw new ConsuloError(
+                        400,
+                        "Usernames are 3-30 characters and may use lowercase letters, numbers, dots, underscores and hyphens"
+                    );
+                }
+                const taken = await this.userRepository.getUserByUsername(username);
+                if (taken && taken.id !== userId) {
+                    throw new ConsuloError(409, "That username is already taken");
+                }
+                existingUser.username = username;
+            }
+        }
+
+        if (patch.bio !== undefined) {
+            const bio = String(patch.bio).trim();
+            if (bio.length > 1000) throw new ConsuloError(400, "Bio must be under 1000 characters");
+            existingUser.bio = bio;
+        }
+
+        if (patch.removeProfilePicture) {
+            existingUser.profilePicture = "";
+        } else if (patch.profilePictureBase64) {
+            const cloudinaryHandler = new CloudinaryHandler();
+            existingUser.profilePicture = await cloudinaryHandler.uploadProfilePicture(patch.profilePictureBase64);
+        }
+
+        if (patch.title !== undefined) {
+            if (existingUser.role !== "freelancer") {
+                throw new ConsuloError(400, "Only consultants have a professional field");
+            }
+            const title = String(patch.title).trim();
+            if (title.length < 2 || title.length > 100) {
+                throw new ConsuloError(400, "Your field must be between 2 and 100 characters");
+            }
+
+            const profile = await this.userRepository.getFreelancerProfileByUserId(userId);
+            if (profile) {
+                await this.userRepository.updateFreelancerProfileTitle(userId, title);
+            } else {
+                await this.userRepository.createFreelancerProfile(
+                    this.randomGenerator.generateRandomString(32),
+                    userId,
+                    title
+                );
+            }
+        }
+
+        await this.userRepository.updateUser(existingUser);
+        return await this.toPublicUser(existingUser);
+    }
+
+    async updateFreelancerScore(userId: string, score: number) {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+        await this.userRepository.updateFreelancerProfileScore(userId, score);
+    }
+
+    async resetFreelancerAssessment(userId: string): Promise<PublicUser> {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+        const user = await this.userRepository.getUserById(userId);
+        if (!user) {
+            throw new ConsuloError(404, "User not found");
+        }
+        if (user.role !== "freelancer") {
+            throw new ConsuloError(400, "Only consultants can reset the AI assessment");
+        }
+        await this.userRepository.updateFreelancerProfileScore(userId, null);
+        return await this.toPublicUser(user);
+    }
+
+    async searchFreelancers(options: {
+        query?: string;
+        minTestScore?: number;
+        minRating?: number;
+        sortBy?: "relevance" | "rating" | "test_score" | "newest";
+    }): Promise<Array<{
+        id: string; username: string; firstName: string; lastName: string; title: string;
+        testScore: number | null; profilePicture: string; averageRating: number | null; reviewCount: number;
+    }>> {
+        const rows = await this.userRepository.searchFreelancers(options);
+        return rows.map((row) => ({
+            id: row.id,
+            username: row.username,
+            firstName: row.first_name,
+            lastName: row.last_name,
+            title: row.title,
+            testScore: row.test_score,
+            profilePicture: row.profile_picture,
+            averageRating: row.average_rating,
+            reviewCount: row.review_count
+        }));
+    }
+
+    async addCertification(userId: string, name: string, url?: string, imageBase64?: string): Promise<{ id: string; name: string; url: string }> {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+        if (!name || !name.trim()) {
+            throw new ConsuloError(400, "Certification name is required");
+        }
+
+        let finalUrl = "";
+        if (imageBase64) {
+            const cloudinaryHandler = new CloudinaryHandler();
+            finalUrl = await cloudinaryHandler.uploadImage(imageBase64);
+        } else if (url) {
+            finalUrl = url.trim();
+        } else {
+            throw new ConsuloError(400, "Either a link or an uploaded image is required");
+        }
+
+        if (!finalUrl) {
+            throw new ConsuloError(400, "Invalid certification URL or image");
+        }
+
+        const id = this.randomGenerator.generateRandomString(32);
+        return await this.userRepository.addCertification(id, userId, name.trim(), finalUrl);
+    }
+
+    async deleteCertification(userId: string, certificationId: string): Promise<void> {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+        if (!certificationId) {
+            throw new ConsuloError(400, "Certification ID is required");
+        }
+        const deleted = await this.userRepository.deleteCertification(certificationId, userId);
+        if (!deleted) {
+            throw new ConsuloError(404, "Certification not found");
+        }
+    }
+
+    async generateAssessmentQuestions(userId: string): Promise<string[]> {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+
+        const user = await this.getUserInfoById(userId);
+        if (user.role !== "freelancer") {
+            throw new ConsuloError(400, "Only consultants can take assessments");
+        }
+
+        const field = user.title || "General Consulting";
+        const openrouterApiKey = (process.env.OPENROUTER_API_KEY || "").trim();
+        const modelName = (process.env.OPENROUTER_MODEL || "google/gemma-2-27b-it").trim();
+
+        if (!openrouterApiKey) {
+            return Array.from({ length: 20 }, (_, i) => `Tough Question ${i + 1} for ${field}: Describe your advanced experience and strategy in this area.`);
+        }
+
+        const apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${openrouterApiKey}`
+            },
+            body: JSON.stringify({
+                model: modelName,
+                messages: [
+                    {
+                        role: "user",
+                        content: `Generate exactly 20 professional, and specific assessment questions for a candidate specializing in the field of "${field}". The questions should assess technical or practical knowledge. Return the questions as a JSON array of strings, like this: ["Question 1", "Question 2", ...]. Return ONLY the JSON array, no extra text, explanations, markdown blocks, or formatting.`
+                    }
+                ]
+            })
+        });
+
+        if (!apiRes.ok) {
+            const errText = await apiRes.text();
+            console.error("OpenRouter error response:", errText);
+            throw new ConsuloError(502, "Failed to generate questions from AI service");
+        }
+
+        const json = (await apiRes.json()) as any;
+        const content = String(json.choices?.[0]?.message?.content || "").trim();
         
+        let questions: string[] = [];
+        try {
+            let clean = content;
+            if (clean.startsWith("```")) {
+                const lines = clean.split("\n");
+                if (lines[0].startsWith("```")) lines.shift();
+                if (lines[lines.length - 1].startsWith("```")) lines.pop();
+                clean = lines.join("\n").trim();
+            }
+            questions = JSON.parse(clean);
+        } catch {
+            const start = content.indexOf("[");
+            const end = content.lastIndexOf("]");
+            if (start !== -1 && end !== -1) {
+                try {
+                    questions = JSON.parse(content.slice(start, end + 1));
+                } catch {}
+            }
+        }
+
+        if (!Array.isArray(questions) || questions.length === 0) {
+            questions = Array.from({ length: 20 }, (_, i) => `Tough Question ${i + 1} for ${field}: Describe your advanced experience and strategy in this area.`);
+        }
+
+        return questions;
+    }
+
+    async gradeAssessment(userId: string, answers: Array<{ question: string; answer: string }>): Promise<{ score: number; feedback: string }> {
+        if (!userId) {
+            throw new ConsuloError(406, "User ID is required");
+        }
+        if (!Array.isArray(answers) || answers.length === 0) {
+            throw new ConsuloError(400, "Answers are required");
+        }
+
+        const user = await this.getUserInfoById(userId);
+        if (user.role !== "freelancer") {
+            throw new ConsuloError(400, "Only consultants can take assessments");
+        }
+
+        const field = user.title || "General Consulting";
+        const openrouterApiKey = (process.env.OPENROUTER_API_KEY || "").trim();
+        const modelName = (process.env.OPENROUTER_MODEL || "google/gemma-2-27b-it").trim();
+
+        let score = 75;
+        let feedback = "Answers submitted successfully.";
+
+        if (openrouterApiKey) {
+            const qaText = answers.map((a, i) => `Q${i+1}: ${a.question}\nA: ${a.answer}`).join("\n\n");
+            const apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${openrouterApiKey}`
+                },
+                body: JSON.stringify({
+                    model: modelName,
+                    messages: [
+                        {
+                            role: "user",
+                            content: `You are an expert interviewer evaluating a candidate for a position in the field of "${field}". Below are 20 questions asked to the candidate, along with their answers. Grade their performance overall and output an integer score out of 100.\n\nQuestions and Answers:\n${qaText}\n\nProvide your evaluation as a JSON object with two fields:\n1. "score": a single integer from 0 to 100 representing the grade.\n2. "feedback": a short paragraph (2-3 sentences) explaining the grade.\n\nReturn ONLY the raw JSON object. Do not include any markdown fences or explanation outside the JSON.`
+                        }
+                    ]
+                })
+            });
+
+            if (apiRes.ok) {
+                const json = (await apiRes.json()) as any;
+                const content = String(json.choices?.[0]?.message?.content || "").trim();
+                try {
+                    let clean = content;
+                    if (clean.startsWith("```")) {
+                        const lines = clean.split("\n");
+                        if (lines[0].startsWith("```")) lines.shift();
+                        if (lines[lines.length - 1].startsWith("```")) lines.pop();
+                        clean = lines.join("\n").trim();
+                    }
+                    const parsed = JSON.parse(clean);
+                    if (typeof parsed.score === "number") {
+                        score = parsed.score;
+                    }
+                    if (parsed.feedback) {
+                        feedback = parsed.feedback;
+                    }
+                } catch {
+                    const start = content.indexOf("{");
+                    const end = content.lastIndexOf("}");
+                    if (start !== -1 && end !== -1) {
+                        try {
+                            const parsed = JSON.parse(content.slice(start, end + 1));
+                            if (typeof parsed.score === "number") {
+                                score = parsed.score;
+                            }
+                            if (parsed.feedback) {
+                                feedback = parsed.feedback;
+                            }
+                        } catch {}
+                    }
+                }
+            } else {
+                const errText = await apiRes.text();
+                console.error("OpenRouter evaluation error response:", errText);
+            }
+        } else {
+            const totalLength = answers.reduce((sum, a) => sum + String(a.answer || "").length, 0);
+            score = Math.min(100, Math.max(30, Math.floor(totalLength / 50) + 40));
+            feedback = "Evaluation completed using mock assessor (no API key provided).";
+        }
+
+        await this.updateFreelancerScore(userId, score);
+
+        return { score, feedback };
+    }
 }
 
 export { UserService };

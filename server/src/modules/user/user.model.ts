@@ -6,21 +6,23 @@ class User{
     email:string;
     username:string;
     password:string;
-    role:string;
+    role:string | null | undefined;
     isVerified:boolean;
     bio:string;
     profilePicture:string;
+    isSuspended:boolean;
 
-    constructor(id:string, 
-        firstName:string, 
-        lastName:string, 
-        email:string, 
-        username:string, 
-        role:string, 
-        isVerified:boolean, 
-        bio:string, 
+    constructor(id:string,
+        firstName:string,
+        lastName:string,
+        email:string,
+        username:string,
+        role:string | null | undefined,
+        isVerified:boolean,
+        bio:string,
         profilePicture:string,
-        password:string){
+        password:string,
+        isSuspended:boolean = false){
 
         this.id = id;
         this.firstName = firstName;
@@ -32,6 +34,7 @@ class User{
         this.bio = bio;
         this.password = password;
         this.profilePicture = profilePicture;
+        this.isSuspended = isSuspended;
     }
 
 }
