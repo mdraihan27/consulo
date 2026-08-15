@@ -2,7 +2,6 @@ import { Server as SocketIOServer, Socket } from "socket.io";
 import { BookingRepository } from "./modules/booking/booking.repository";
 import { UserRepository } from "./modules/user/user.repository";
 import { NotificationService } from "./modules/notification/notification.service";
-import { SessionService } from "./modules/scheduling/session.service";
 import { JwtHandler } from "./utils/jwtHandler";
 import { CloudinaryHandler } from "./utils/cloudinaryHandler";
 import { v4 as uuidv4 } from "uuid";
@@ -10,7 +9,6 @@ import { v4 as uuidv4 } from "uuid";
 const bookingRepo = new BookingRepository();
 const userRepo = new UserRepository();
 const notificationService = new NotificationService();
-const sessionService = new SessionService();
 const jwtHandler = new JwtHandler();
 const cloudinaryHandler = new CloudinaryHandler();
 
@@ -80,6 +78,11 @@ export function setupSocketIO(io: SocketIOServer) {
 		markOnline(userId);
 		io.emit("presence_update", { userId, isOnline: true });
 
+		// Every socket a user has open joins their personal room. Call signals go
+		// here rather than to the booking room, so an incoming call reaches them
+		// wherever they are in the app instead of only inside that one chat page.
+		socket.join(`user:${userId}`);
+
 		socket.on("join_booking", async (data: { bookingId: string }) => {
 			const { bookingId } = data;
 			if (!bookingId) return;
@@ -114,6 +117,7 @@ export function setupSocketIO(io: SocketIOServer) {
 
 			const msgId = uuidv4();
 			const message = await bookingRepo.addMessage(msgId, bookingId, userId, content.trim());
+			const sender = await userRepo.getUserById(userId);
 
 			io.to(`booking:${bookingId}`).emit("new_message", {
 				id: message.id,
@@ -123,7 +127,11 @@ export function setupSocketIO(io: SocketIOServer) {
 				messageType: message.messageType,
 				fileUrl: message.fileUrl,
 				fileName: message.fileName,
-				createdAt: message.createdAt
+				createdAt: message.createdAt,
+				firstName: sender?.firstName,
+				lastName: sender?.lastName,
+				username: sender?.username,
+				profilePicture: sender?.profilePicture
 			});
 
 			const recipientId = booking.clientId === userId ? booking.consultantId : booking.clientId;
@@ -149,6 +157,7 @@ export function setupSocketIO(io: SocketIOServer) {
 				const fileUrl = await cloudinaryHandler.uploadChatFile(fileBase64);
 				const msgId = uuidv4();
 				const message = await bookingRepo.addMessage(msgId, bookingId, userId, fileName, "file", fileUrl, fileName);
+				const sender = await userRepo.getUserById(userId);
 
 				io.to(`booking:${bookingId}`).emit("new_message", {
 					id: message.id,
@@ -158,7 +167,11 @@ export function setupSocketIO(io: SocketIOServer) {
 					messageType: message.messageType,
 					fileUrl: message.fileUrl,
 					fileName: message.fileName,
-					createdAt: message.createdAt
+					createdAt: message.createdAt,
+					firstName: sender?.firstName,
+					lastName: sender?.lastName,
+					username: sender?.username,
+					profilePicture: sender?.profilePicture
 				});
 
 				const recipientId = booking.clientId === userId ? booking.consultantId : booking.clientId;
@@ -225,7 +238,29 @@ export function setupSocketIO(io: SocketIOServer) {
 			if (!booking) return;
 			if (booking.clientId !== userId && booking.consultantId !== userId) return;
 
-			socket.to(`booking:${bookingId}`).emit("call_signal", { bookingId, type, callType, payload, fromUserId: userId });
+			const recipientId = booking.clientId === userId ? booking.consultantId : booking.clientId;
+
+			// Only the opening offer needs the caller's identity for the ringing
+			// screen; looking it up on every ICE candidate would be wasteful.
+			let fromName: string | undefined;
+			let fromPicture: string | undefined;
+			if (type === "call_offer") {
+				const caller = await userRepo.getUserById(userId);
+				if (caller) {
+					fromName = `${caller.firstName || ""} ${caller.lastName || ""}`.trim() || caller.username;
+					fromPicture = caller.profilePicture || undefined;
+				}
+			}
+
+			io.to(`user:${recipientId}`).emit("call_signal", {
+				bookingId,
+				type,
+				callType,
+				payload,
+				fromUserId: userId,
+				fromName,
+				fromPicture
+			});
 		});
 
 		socket.on("disconnect", () => {

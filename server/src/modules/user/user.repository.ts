@@ -123,9 +123,21 @@ class UserRepository{
         return this.mapRowToUser(result.rows[0]);
     }
 
-    async getFreelancerProfileByUserId(userId: string): Promise<{ id: string; user_id: string; title: string; test_score: number | null } | null> {
+    async getFreelancerProfileByUserId(userId: string): Promise<{
+        id: string;
+        user_id: string;
+        title: string;
+        test_score: number | null;
+        assessment_score: number | null;
+        cert_score: number;
+        rating_score: number;
+    } | null> {
         const query = {
-            text: "SELECT id, user_id, title, test_score FROM freelancer_profiles WHERE user_id=$1",
+            text: `SELECT id, user_id, title, test_score,
+                   COALESCE(assessment_score, CASE WHEN test_score IS NOT NULL THEN LEAST(50, test_score) ELSE NULL END) AS assessment_score,
+                   COALESCE(cert_score, 0) AS cert_score,
+                   COALESCE(rating_score, 0) AS rating_score
+                   FROM freelancer_profiles WHERE user_id=$1`,
             values: [userId]
         };
         const result = await pool.query(query);
@@ -136,13 +148,16 @@ class UserRepository{
             id: result.rows[0].id,
             user_id: result.rows[0].user_id,
             title: result.rows[0].title,
-            test_score: result.rows[0].test_score
+            test_score: result.rows[0].test_score !== null ? Number(result.rows[0].test_score) : null,
+            assessment_score: result.rows[0].assessment_score !== null ? Number(result.rows[0].assessment_score) : null,
+            cert_score: Number(result.rows[0].cert_score || 0),
+            rating_score: Number(result.rows[0].rating_score || 0)
         };
     }
 
     async createFreelancerProfile(id: string, userId: string, title: string) {
         const query = {
-            text: "INSERT INTO freelancer_profiles (id, user_id, title) VALUES ($1, $2, $3)",
+            text: "INSERT INTO freelancer_profiles (id, user_id, title, cert_score, rating_score) VALUES ($1, $2, $3, 0, 0)",
             values: [id, userId, title]
         };
         return await pool.query(query);
@@ -160,6 +175,41 @@ class UserRepository{
         const query = {
             text: "UPDATE freelancer_profiles SET test_score=$1 WHERE user_id=$2",
             values: [score, userId]
+        };
+        return await pool.query(query);
+    }
+
+    async updateFreelancerProfileScores(userId: string, scores: {
+        testScore: number | null;
+        assessmentScore?: number | null;
+        certScore?: number;
+        ratingScore?: number;
+    }) {
+        const query = {
+            text: `UPDATE freelancer_profiles 
+                   SET test_score = $1,
+                       assessment_score = CASE WHEN $2::integer IS NOT NULL THEN $2::integer ELSE assessment_score END,
+                       cert_score = CASE WHEN $3::integer IS NOT NULL THEN $3::integer ELSE cert_score END,
+                       rating_score = CASE WHEN $4::integer IS NOT NULL THEN $4::integer ELSE rating_score END
+                   WHERE user_id = $5`,
+            values: [
+                scores.testScore,
+                scores.assessmentScore !== undefined ? scores.assessmentScore : null,
+                scores.certScore !== undefined ? scores.certScore : null,
+                scores.ratingScore !== undefined ? scores.ratingScore : null,
+                userId
+            ]
+        };
+        return await pool.query(query);
+    }
+
+    async resetFreelancerAssessmentScore(userId: string) {
+        const query = {
+            text: `UPDATE freelancer_profiles 
+                   SET assessment_score = NULL,
+                       test_score = NULL
+                   WHERE user_id = $1`,
+            values: [userId]
         };
         return await pool.query(query);
     }
@@ -223,22 +273,41 @@ class UserRepository{
         return result.rows;
     }
 
-    async addCertification(id: string, userId: string, name: string, url: string): Promise<{ id: string; user_id: string; name: string; url: string }> {
+    async addCertification(id: string, userId: string, name: string, url: string, score: number = 0): Promise<{ id: string; user_id: string; name: string; url: string; score: number }> {
         const query = {
-            text: "INSERT INTO freelancer_certifications (id, user_id, name, url) VALUES ($1, $2, $3, $4) RETURNING *",
-            values: [id, userId, name, url]
+            text: "INSERT INTO freelancer_certifications (id, user_id, name, url, score) VALUES ($1, $2, $3, $4, $5) RETURNING id, user_id, name, url, COALESCE(score, 0) as score",
+            values: [id, userId, name, url, score]
         };
         const result = await pool.query(query);
-        return result.rows[0];
+        return {
+            id: result.rows[0].id,
+            user_id: result.rows[0].user_id,
+            name: result.rows[0].name,
+            url: result.rows[0].url,
+            score: Number(result.rows[0].score || 0)
+        };
     }
 
-    async getCertificationsByUserId(userId: string): Promise<Array<{ id: string; name: string; url: string }>> {
+    async getCertificationsByUserId(userId: string): Promise<Array<{ id: string; name: string; url: string; score: number }>> {
         const query = {
-            text: "SELECT id, name, url FROM freelancer_certifications WHERE user_id=$1 ORDER BY created_at ASC",
+            text: "SELECT id, name, url, COALESCE(score, 0) as score FROM freelancer_certifications WHERE user_id=$1 ORDER BY created_at ASC",
             values: [userId]
         };
         const result = await pool.query(query);
-        return result.rows || [];
+        return (result.rows || []).map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            url: row.url,
+            score: Number(row.score || 0)
+        }));
+    }
+
+    async updateCertificationScore(id: string, score: number) {
+        const query = {
+            text: "UPDATE freelancer_certifications SET score=$1 WHERE id=$2",
+            values: [score, id]
+        };
+        return await pool.query(query);
     }
 
     async deleteCertification(id: string, userId: string): Promise<{ id: string } | null> {
@@ -251,4 +320,4 @@ class UserRepository{
     }
 }
 
-export {UserRepository};
+export {UserRepository};

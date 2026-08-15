@@ -80,24 +80,8 @@ export default function BookingsPage() {
 	const pastBookings = bookings.filter((b) => ["declined", "completed"].includes(b.status));
 
 	return (
-		<div className="flex min-h-dvh flex-col bg-bg">
-			<header className="border-b border-border bg-base">
-				<div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4">
-					<div className="flex items-center gap-4">
-						<Link href="/" className="inline-flex items-center">
-							<img src="/assets/images/logo.svg" alt="Consulo" className="h-6 w-auto" />
-						</Link>
-						<span className="text-sm text-text-muted">Bookings & Messages</span>
-					</div>
-					<Link href="/dashboard" className="rounded-md border border-border-strong px-3 py-2 text-sm font-medium text-text-primary hover:bg-bg-soft">
-						← Dashboard
-					</Link>
-				</div>
-			</header>
-
-			<main className="flex-1">
-				<div className="mx-auto w-full max-w-5xl px-6 py-10">
-					<div className="mb-8">
+		<div className="mx-auto w-full max-w-5xl px-6 py-10">
+				<div className="mb-8">
 						<h1 className="text-2xl font-bold tracking-tight text-text-primary">
 							{me?.role === "freelancer" ? "Consultation Requests" : "My Bookings"}
 						</h1>
@@ -199,8 +183,6 @@ export default function BookingsPage() {
 							)}
 						</div>
 					)}
-				</div>
-			</main>
 		</div>
 	);
 }

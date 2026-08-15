@@ -6,7 +6,7 @@
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS session_duration_minutes INTEGER NOT NULL DEFAULT 60;
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS buffer_minutes INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS min_notice_hours INTEGER NOT NULL DEFAULT 12;
+ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS min_notice_hours INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS booking_horizon_days INTEGER NOT NULL DEFAULT 30;
 
 -- Recurring weekly availability. Times are minutes-from-midnight in the

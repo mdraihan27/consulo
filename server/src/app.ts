@@ -9,7 +9,6 @@ import { disputeRoutes } from "./modules/dispute/dispute.routes";
 import { reviewRoutes } from "./modules/review/review.routes";
 import { favoriteRoutes } from "./modules/favorite/favorite.routes";
 import { notificationRoutes } from "./modules/notification/notification.routes";
-import { schedulingRoutes } from "./modules/scheduling/scheduling.routes";
 import dotenv from "dotenv";
 import { authMiddleware } from "./middlewares/authMiddleware";
 
@@ -18,8 +17,8 @@ dotenv.config();
 const app = express();
 
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(authMiddleware);
 
 app.get("/", (req, res) => {
@@ -36,7 +35,6 @@ app.use("/api/v1", disputeRoutes);
 app.use("/api/v1", reviewRoutes);
 app.use("/api/v1", favoriteRoutes);
 app.use("/api/v1", notificationRoutes);
-app.use("/api/v1", schedulingRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

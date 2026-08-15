@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { ReviewRepository } from "./review.repository";
 import { ContractRepository } from "../contract/contract.repository";
 import { NotificationService } from "../notification/notification.service";
+import { UserService } from "../user/user.service";
 import { ConsuloError } from "../../utils/errorHandler";
 import { Review } from "./review.model";
 
@@ -39,6 +40,16 @@ export class ReviewService {
 		}
 
 		const review = await this.reviewRepository.createReview(uuidv4(), contractId, reviewerId, revieweeId, rating, comment.trim());
+
+		// Recalculate consultant composite score (ratings contribute up to 20 points)
+		if (contract.consultantId === revieweeId) {
+			try {
+				const userService = new UserService();
+				await userService.recalculateFreelancerTotalScore(revieweeId);
+			} catch (e) {
+				console.error("Failed to recalculate freelancer score on review submission:", e);
+			}
+		}
 
 		const allReviews = await this.reviewRepository.getReviewsByContractId(contractId);
 		if (allReviews.length === 2) {

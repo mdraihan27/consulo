@@ -16,8 +16,11 @@ export type PublicUser = {
 	profilePicture?: string;
 	title?: string;
 	testScore?: number | null;
+	assessmentScore?: number | null;
+	certScore?: number;
+	ratingScore?: number;
 	bookingsCount?: number;
-	certifications?: Array<{ id: string; name: string; url: string }>;
+	certifications?: Array<{ id: string; name: string; url: string; score?: number }>;
 };
 
 async function parseJsonSafe(res: Response): Promise<any> {
@@ -94,8 +97,8 @@ export async function getAssessmentQuestions(): Promise<{ questions: string[] }>
 	return envelope.data;
 }
 
-export async function submitAssessment(answers: Array<{ question: string; answer: string }>): Promise<{ score: number; feedback: string }> {
-	const envelope = await request<{ score: number; feedback: string }>("/api/v1/user/assessment/submit", {
+export async function submitAssessment(answers: Array<{ question: string; answer: string }>): Promise<{ score: number; totalScore?: number; feedback: string }> {
+	const envelope = await request<{ score: number; totalScore?: number; feedback: string }>("/api/v1/user/assessment/submit", {
 		method: "POST",
 		body: JSON.stringify({ answers })
 	});
@@ -109,8 +112,8 @@ export async function retakeAssessment(): Promise<PublicUser> {
 	return envelope.data;
 }
 
-export async function addCertification(name: string, url?: string, imageBase64?: string): Promise<{ id: string; name: string; url: string }> {
-	const envelope = await request<{ id: string; name: string; url: string }>("/api/v1/user/certifications", {
+export async function addCertification(name: string, url?: string, imageBase64?: string): Promise<{ id: string; name: string; url: string; score?: number }> {
+	const envelope = await request<{ id: string; name: string; url: string; score?: number }>("/api/v1/user/certifications", {
 		method: "POST",
 		body: JSON.stringify({ name, url, imageBase64 })
 	});
@@ -146,14 +149,16 @@ export type FreelancerSearchFilters = {
 
 export async function searchFreelancers(filters: FreelancerSearchFilters): Promise<FreelancerSearchResult[]> {
 	const params = new URLSearchParams();
-	if (filters.query) params.set("q", filters.query);
+	if (filters.query?.trim()) params.set("q", filters.query.trim());
 	if (filters.minTestScore !== undefined) params.set("minTestScore", String(filters.minTestScore));
 	if (filters.minRating !== undefined) params.set("minRating", String(filters.minRating));
 	if (filters.sortBy) params.set("sortBy", filters.sortBy);
 
-	const envelope = await request<{ freelancers: FreelancerSearchResult[] }>(`/api/v1/user/freelancers/search?${params.toString()}`, {
-		method: "GET"
-	});
+	const query = params.toString();
+	const envelope = await request<{ freelancers: FreelancerSearchResult[] }>(
+		`/api/v1/user/freelancers/search${query ? `?${query}` : ""}`,
+		{ method: "GET" }
+	);
 	return envelope.data.freelancers;
 }
 
@@ -166,7 +171,10 @@ export type ConsultantProfile = {
 	profilePicture?: string;
 	title?: string;
 	testScore?: number | null;
-	certifications?: Array<{ id: string; name: string; url: string }>;
+	assessmentScore?: number | null;
+	certScore?: number;
+	ratingScore?: number;
+	certifications?: Array<{ id: string; name: string; url: string; score?: number }>;
 };
 
 export async function getConsultantProfile(id: string): Promise<ConsultantProfile> {
@@ -814,181 +822,4 @@ export async function getChatHistory(bookingId: string): Promise<{ booking: any;
 }
 
 
-// ---------------------------------------------------------------------------
-// Scheduling
-// ---------------------------------------------------------------------------
 
-export type SessionStatus = "pending" | "scheduled" | "completed" | "cancelled" | "no_show";
-export type SessionMode = "online" | "offline";
-
-export type SchedulingSettings = {
-	timezone: string;
-	sessionDurationMinutes: number;
-	bufferMinutes: number;
-	minNoticeHours: number;
-	bookingHorizonDays: number;
-};
-
-export type AvailabilityRule = {
-	id: string;
-	userId: string;
-	weekday: number;
-	startMinute: number;
-	endMinute: number;
-};
-
-export type TimeOffBlock = {
-	id: string;
-	userId: string;
-	startAt: string;
-	endAt: string;
-	reason: string;
-};
-
-export type MyAvailability = {
-	settings: SchedulingSettings;
-	rules: AvailabilityRule[];
-	timeOff: TimeOffBlock[];
-};
-
-export type OpenSlot = {
-	startAt: string;
-	endAt: string;
-};
-
-export type ConsultantSlots = {
-	consultantId: string;
-	timezone: string;
-	sessionDurationMinutes: number;
-	slots: OpenSlot[];
-};
-
-export type SessionParty = {
-	firstName: string;
-	lastName: string;
-	profilePicture?: string;
-	title?: string;
-};
-
-export type ConsultationSession = {
-	id: string;
-	bookingId: string;
-	clientId: string;
-	consultantId: string;
-	startAt: string;
-	endAt: string;
-	mode: SessionMode;
-	location: string;
-	agenda: string;
-	status: SessionStatus;
-	cancelledBy: string | null;
-	cancellationReason: string | null;
-	cancelledAt: string | null;
-	rescheduledFromId: string | null;
-	createdAt: string;
-	bookingStatus?: string;
-	client: SessionParty;
-	consultant: SessionParty;
-};
-
-export async function getMyAvailability(): Promise<MyAvailability> {
-	const envelope = await request<MyAvailability>("/api/v1/availability/me", { method: "GET" });
-	return envelope.data;
-}
-
-export async function updateMyAvailability(
-	settings: SchedulingSettings,
-	rules: Array<{ weekday: number; startMinute: number; endMinute: number }>
-): Promise<MyAvailability> {
-	const envelope = await request<MyAvailability>("/api/v1/availability/me", {
-		method: "PUT",
-		body: JSON.stringify({ settings, rules })
-	});
-	return envelope.data;
-}
-
-export async function addTimeOff(
-	startAt: string,
-	endAt: string,
-	reason: string
-): Promise<{ timeOff: TimeOffBlock; clashingSessionCount: number }> {
-	const envelope = await request<{ timeOff: TimeOffBlock; clashingSessionCount: number }>(
-		"/api/v1/availability/me/time-off",
-		{ method: "POST", body: JSON.stringify({ startAt, endAt, reason }) }
-	);
-	return envelope.data;
-}
-
-export async function removeTimeOff(timeOffId: string): Promise<void> {
-	await request<any>(`/api/v1/availability/me/time-off/${timeOffId}`, { method: "DELETE" });
-}
-
-export async function getConsultantSlots(
-	consultantId: string,
-	from?: string,
-	to?: string,
-	excludeSessionId?: string
-): Promise<ConsultantSlots> {
-	const params = new URLSearchParams();
-	if (from) params.set("from", from);
-	if (to) params.set("to", to);
-	if (excludeSessionId) params.set("excludeSessionId", excludeSessionId);
-	const suffix = params.toString() ? `?${params.toString()}` : "";
-
-	const envelope = await request<ConsultantSlots>(`/api/v1/consultants/${consultantId}/slots${suffix}`, {
-		method: "GET"
-	});
-	return envelope.data;
-}
-
-export async function getMySessions(): Promise<ConsultationSession[]> {
-	const envelope = await request<{ sessions: ConsultationSession[] }>("/api/v1/sessions", { method: "GET" });
-	return envelope.data.sessions;
-}
-
-export async function getSessionsForBooking(bookingId: string): Promise<ConsultationSession[]> {
-	const envelope = await request<{ sessions: ConsultationSession[] }>(`/api/v1/bookings/${bookingId}/sessions`, {
-		method: "GET"
-	});
-	return envelope.data.sessions;
-}
-
-export async function bookSession(input: {
-	bookingId: string;
-	startAt: string;
-	mode?: SessionMode;
-	location?: string;
-	agenda?: string;
-}): Promise<ConsultationSession> {
-	const envelope = await request<ConsultationSession>("/api/v1/sessions", {
-		method: "POST",
-		body: JSON.stringify(input)
-	});
-	return envelope.data;
-}
-
-export async function rescheduleSession(sessionId: string, startAt: string): Promise<ConsultationSession> {
-	const envelope = await request<ConsultationSession>(`/api/v1/sessions/${sessionId}/reschedule`, {
-		method: "POST",
-		body: JSON.stringify({ startAt })
-	});
-	return envelope.data;
-}
-
-export async function cancelSession(sessionId: string, reason: string): Promise<ConsultationSession> {
-	const envelope = await request<ConsultationSession>(`/api/v1/sessions/${sessionId}/cancel`, {
-		method: "POST",
-		body: JSON.stringify({ reason })
-	});
-	return envelope.data;
-}
-
-export async function completeSession(sessionId: string): Promise<ConsultationSession> {
-	const envelope = await request<ConsultationSession>(`/api/v1/sessions/${sessionId}/complete`, { method: "POST" });
-	return envelope.data;
-}
-
-export async function markSessionNoShow(sessionId: string): Promise<ConsultationSession> {
-	const envelope = await request<ConsultationSession>(`/api/v1/sessions/${sessionId}/no-show`, { method: "POST" });
-	return envelope.data;
-}

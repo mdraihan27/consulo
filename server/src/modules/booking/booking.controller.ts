@@ -8,15 +8,14 @@ export class BookingController {
 		try {
 			const clientId = req.user?.id;
 			if (!clientId) return res.status(401).json({ success: false, message: "Unauthorized" });
-			const { consultantId, message, startAt, mode, location, agenda } = req.body;
+			const { consultantId, message } = req.body;
 			if (!consultantId || !message?.trim()) {
 				return res.status(400).json({ success: false, message: "consultantId and message are required." });
 			}
 			const booking = await bookingService.requestBooking(
 				clientId,
 				consultantId,
-				message.trim(),
-				startAt ? { startAt: String(startAt), mode, location, agenda } : undefined
+				message.trim()
 			);
 			return res.status(201).json({ success: true, message: "Booking request sent.", data: booking });
 		} catch (err) {

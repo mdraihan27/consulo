@@ -1,7 +1,5 @@
 "use client";
 
-import type { ConsultationSession, OpenSlot, SessionStatus } from "./api";
-
 export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 export const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -63,55 +61,4 @@ export function formatRelative(iso: string): string {
 	const days = Math.round(hours / 24);
 	if (days < 30) return format(days, "day");
 	return format(Math.round(days / 30), "month");
-}
-
-export type SlotDay = {
-	key: string;
-	label: string;
-	slots: OpenSlot[];
-};
-
-/** Group open slots into the viewer's local calendar days, in order. */
-export function groupSlotsByLocalDay(slots: OpenSlot[]): SlotDay[] {
-	const days = new Map<string, SlotDay>();
-
-	for (const slot of slots) {
-		const date = new Date(slot.startAt);
-		const key = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
-
-		let day = days.get(key);
-		if (!day) {
-			day = {
-				key,
-				label: date.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" }),
-				slots: []
-			};
-			days.set(key, day);
-		}
-		day.slots.push(slot);
-	}
-
-	return Array.from(days.values());
-}
-
-export const SESSION_STATUS_LABEL: Record<SessionStatus, string> = {
-	pending: "Awaiting confirmation",
-	scheduled: "Scheduled",
-	completed: "Completed",
-	cancelled: "Cancelled",
-	no_show: "No-show"
-};
-
-export function isSessionUpcoming(session: ConsultationSession): boolean {
-	return (
-		(session.status === "scheduled" || session.status === "pending") &&
-		new Date(session.endAt).getTime() > Date.now()
-	);
-}
-
-/** Online sessions open for joining ten minutes early and stay open until the end. */
-export function isSessionJoinable(session: ConsultationSession): boolean {
-	if (session.status !== "scheduled" || session.mode !== "online") return false;
-	const now = Date.now();
-	return now >= new Date(session.startAt).getTime() - 10 * 60 * 1000 && now <= new Date(session.endAt).getTime();
 }

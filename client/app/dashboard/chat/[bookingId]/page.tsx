@@ -3,16 +3,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getMe, getChatHistory, markBookingRead, getSessionsForBooking, type PublicUser, type ChatMessage, type Contract, type ConsultationSession } from "../../../_lib/api";
-import { formatRelative, formatSessionDate, formatSessionTime, isSessionUpcoming } from "../../../_lib/schedule";
-import { ScheduleSessionModal } from "../../../_components/ScheduleSessionModal";
+import { getMe, getChatHistory, markBookingRead, respondToBooking, type PublicUser, type ChatMessage, type Contract } from "../../../_lib/api";
 import { useChatSocket } from "../../../_lib/useChatSocket";
-import { useWebRTCCall } from "../../../_lib/useWebRTCCall";
+import { useCall } from "../../../_components/CallProvider";
 import { CreateContractModal } from "../../../_components/CreateContractModal";
 import { ChatHeader } from "../../../_components/ChatHeader";
 import { MessageBubble } from "../../../_components/MessageBubble";
 import { TypingIndicator } from "../../../_components/TypingIndicator";
-import { CallModal } from "../../../_components/CallModal";
 import { Spinner } from "../../../_components/Spinner";
 
 function formatDate(dateStr: string) {
@@ -44,38 +41,83 @@ export default function ChatPage() {
 	const [isOtherTyping, setIsOtherTyping] = useState(false);
 	const [isOtherOnline, setIsOtherOnline] = useState(false);
 	const [isUploadingFile, setIsUploadingFile] = useState(false);
-	const [sessions, setSessions] = useState<ConsultationSession[]>([]);
-	const [showScheduleSession, setShowScheduleSession] = useState(false);
+	const [isRespondingBooking, setIsRespondingBooking] = useState(false);
 
-	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const messagesContainerRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	const scrollToBottom = useCallback(() => {
-		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	// Someone who has scrolled up to read older messages should stay put when a
+	// new one lands, so auto-scroll only kicks in while they are near the bottom.
+	const isPinnedToBottomRef = useRef(true);
+	const hasDoneFirstScrollRef = useRef(false);
+
+	// Scroll the message list itself rather than calling scrollIntoView, which
+	// walks up to the nearest scrollable ancestor and can drag the whole page.
+	const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+		const container = messagesContainerRef.current;
+		if (!container) return;
+		container.scrollTo({ top: container.scrollHeight, behavior });
 	}, []);
 
+	function handleMessagesScroll() {
+		const container = messagesContainerRef.current;
+		if (!container) return;
+		const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+		isPinnedToBottomRef.current = distanceFromBottom < 120;
+	}
+
 	useEffect(() => {
-		scrollToBottom();
-	}, [messages, scrollToBottom]);
+		if (isLoading) return;
+
+		// The first paint jumps straight to the newest message; smooth-scrolling
+		// through a long history is a slow visible crawl.
+		if (!hasDoneFirstScrollRef.current) {
+			hasDoneFirstScrollRef.current = true;
+			requestAnimationFrame(() => scrollToBottom("auto"));
+			return;
+		}
+
+		if (isPinnedToBottomRef.current) {
+			requestAnimationFrame(() => scrollToBottom("smooth"));
+		}
+	}, [messages, isLoading, scrollToBottom]);
+
+	// The typing indicator adds height at the bottom of the list.
+	useEffect(() => {
+		if (isOtherTyping && isPinnedToBottomRef.current) scrollToBottom("smooth");
+	}, [isOtherTyping, scrollToBottom]);
+
+	// Grow the composer with its content, capped, and shrink back when cleared.
+	useEffect(() => {
+		const textarea = textareaRef.current;
+		if (!textarea) return;
+		textarea.style.height = "auto";
+		textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+	}, [inputValue]);
 
 	useEffect(() => {
 		let isMounted = true;
 		(async () => {
 			setIsLoading(true);
 			try {
-				const [userData, chatData, sessionData] = await Promise.all([
+				const [userData, chatData] = await Promise.all([
 					getMe(),
-					getChatHistory(bookingId),
-					getSessionsForBooking(bookingId).catch(() => [] as ConsultationSession[])
+					getChatHistory(bookingId)
 				]);
 				if (!isMounted) return;
 				setMe(userData);
 				setBooking(chatData.booking);
 				setMessages(chatData.messages);
-				setSessions(sessionData);
-				setOtherUserName(userData.role === "freelancer" ? "Client" : "Consultant");
+
+				const isFreelancer = userData.role === "freelancer";
+				const otherName = isFreelancer
+					? `${chatData.booking?.client_first_name || ""} ${chatData.booking?.client_last_name || ""}`.trim() || chatData.booking?.client_username || "Client"
+					: `${chatData.booking?.consultant_first_name || ""} ${chatData.booking?.consultant_last_name || ""}`.trim() || chatData.booking?.consultant_username || "Consultant";
+				const otherPic = isFreelancer ? chatData.booking?.client_profile_picture : chatData.booking?.consultant_profile_picture;
+				setOtherUserName(otherName);
+				setOtherUserPic(otherPic);
 			} catch (e: any) {
 				if (isMounted) setError(e?.message || "Failed to load chat");
 			} finally {
@@ -90,19 +132,21 @@ export default function ChatPage() {
 	useEffect(() => {
 		if (!me || messages.length === 0) return;
 		const otherMsg = messages.find((m) => m.senderId !== me.id);
-		if (otherMsg) {
+		if (otherMsg && otherMsg.firstName) {
 			setOtherUserName(`${otherMsg.firstName || ""} ${otherMsg.lastName || ""}`.trim() || otherMsg.username || "");
-			setOtherUserPic(otherMsg.profilePicture);
+			if (otherMsg.profilePicture) {
+				setOtherUserPic(otherMsg.profilePicture);
+			}
 		}
 	}, [messages, me]);
 
 	const otherUserId: string | undefined = me && booking ? (booking.client_id === me.id ? booking.consultant_id : booking.client_id) : undefined;
 
-	const { isConnected, sendMessage, sendFile, sendTyping, markRead, sendCallSignal } = useChatSocket({
+	const { isConnected, sendMessage, sendFile, sendTyping, markRead } = useChatSocket({
 		bookingId,
 		onNewMessage: (msg) => {
 			setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-			if (me && msg.senderId !== me.id) {
+			if (msg.senderId !== me?.id) {
 				markRead();
 			}
 		},
@@ -111,15 +155,17 @@ export default function ChatPage() {
 			if (me && userId !== me.id) setIsOtherTyping(isTyping);
 		},
 		onReadReceipt: () => {},
-		onCallSignal: (event) => handleCallSignal(event),
+		// Calls are handled globally by CallProvider. This socket belongs to the
+		// same user and therefore also receives the signal, so it must ignore it
+		// or the handshake would run twice.
+		onCallSignal: () => {},
 		onError: (message) => setError(message),
 		onPresenceUpdate: (userId, isOnline) => {
 			if (userId === null || userId === otherUserId) setIsOtherOnline(isOnline);
 		}
 	});
 
-	const call = useWebRTCCall({ sendCallSignal });
-	const handleCallSignal = call.handleCallSignal;
+	const call = useCall();
 
 	useEffect(() => {
 		if (isConnected && !isLoading && booking?.status === "accepted") {
@@ -140,13 +186,13 @@ export default function ChatPage() {
 		sendMessage(content);
 		setInputValue("");
 		sendTyping(false);
-		if (textareaRef.current) textareaRef.current.style.height = "auto";
+		// Sending is an explicit intent to be at the bottom, even if they had
+		// scrolled up to re-read something first.
+		isPinnedToBottomRef.current = true;
 	}
 
 	function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
 		setInputValue(e.target.value);
-		e.target.style.height = "auto";
-		e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
 
 		sendTyping(true);
 		if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -177,6 +223,18 @@ export default function ChatPage() {
 		}
 	});
 
+	async function handleRespondBooking(action: "accepted" | "declined") {
+		setIsRespondingBooking(true);
+		try {
+			const updated = await respondToBooking(bookingId, action);
+			setBooking((prev: any) => ({ ...prev, status: updated.status }));
+		} catch (err: any) {
+			console.error("Failed to respond to booking:", err);
+		} finally {
+			setIsRespondingBooking(false);
+		}
+	}
+
 	if (isLoading) {
 		return (
 			<div className="flex min-h-dvh items-center justify-center bg-bg">
@@ -194,19 +252,17 @@ export default function ChatPage() {
 		);
 	}
 
-	if (booking.status !== "accepted") {
+	if (booking.status === "declined") {
 		return (
 			<div className="flex min-h-dvh flex-col items-center justify-center bg-bg gap-4 px-6 text-center">
 				<div className="w-16 h-16 rounded-2xl bg-bg-soft border border-border flex items-center justify-center">
 					<svg className="w-8 h-8 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+						<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
 					</svg>
 				</div>
-				<h2 className="text-lg font-semibold text-text-primary">Chat Not Available</h2>
+				<h2 className="text-lg font-semibold text-text-primary">Consultation Request Declined</h2>
 				<p className="text-sm text-text-body max-w-sm">
-					{booking.status === "pending"
-						? "Chat will be available once the consultant accepts your request."
-						: "This consultation has ended."}
+					This booking request has been declined and the conversation is now closed.
 				</p>
 				<Link href="/dashboard/bookings" className="rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-on-accent hover:opacity-90 transition">
 					← Back to Bookings
@@ -215,10 +271,11 @@ export default function ChatPage() {
 		);
 	}
 
+	const isConsultant = me?.id === booking.consultant_id || me?.role === "freelancer";
+	const isPending = booking.status === "pending";
+
 	const myName = `${me?.firstName || ""} ${me?.lastName || ""}`.trim();
-	const nextSession = sessions
-		.filter(isSessionUpcoming)
-		.sort((a, b) => a.startAt.localeCompare(b.startAt))[0];
+
 
 	return (
 		<div className="flex h-dvh flex-col bg-bg">
@@ -229,48 +286,53 @@ export default function ChatPage() {
 				isOtherOnline={isOtherOnline}
 				showStartContract={me?.role === "client"}
 				onStartContract={() => setShowCreateContract(true)}
-				onStartVoiceCall={() => call.startCall("voice")}
-				onStartVideoCall={() => call.startCall("video")}
+				onStartVoiceCall={() => call.startCall(bookingId, "voice")}
+				onStartVideoCall={() => call.startCall(bookingId, "video")}
 			/>
 
-			<div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-base px-4 py-3">
-				{nextSession ? (
-					<div className="min-w-0">
-						<p className="text-xs font-semibold uppercase tracking-wider text-text-muted">Next session</p>
-						<p className="mt-0.5 truncate text-sm font-medium text-text-primary">
-							{formatSessionDate(nextSession.startAt)} · {formatSessionTime(nextSession.startAt)} –{" "}
-							{formatSessionTime(nextSession.endAt)}
-							<span className="ml-2 text-xs font-normal text-text-muted">
-								{formatRelative(nextSession.startAt)}
-								{nextSession.status === "pending" ? " · awaiting confirmation" : ""}
-								{nextSession.mode === "offline" ? ` · ${nextSession.location}` : ""}
-							</span>
-						</p>
+			{/* Consultation request pending status banner */}
+			{isPending && (
+				<div className="flex flex-wrap items-center justify-between gap-3 border-b border-accent/20 bg-accent/10 px-4 py-2.5 text-xs text-text-primary">
+					<div className="flex items-center gap-2">
+						<span className="flex h-2 w-2 rounded-full bg-accent animate-pulse" />
+						<span>
+							{isConsultant ? (
+								<><strong>New Consultation Request:</strong> Chat and discuss with the client below before accepting.</>
+							) : (
+								<><strong>Request Sent:</strong> Chat and discuss consultation details with the expert.</>
+							)}
+						</span>
 					</div>
-				) : (
-					<p className="text-sm text-text-muted">No session scheduled yet.</p>
-				)}
 
-				<div className="flex items-center gap-2">
-					<Link
-						href="/dashboard/sessions"
-						className="rounded-lg border border-border-strong px-3 py-1.5 text-xs font-semibold text-text-primary hover:bg-bg-soft transition"
-					>
-						All sessions
-					</Link>
-					{me?.role === "client" && (
-						<button
-							type="button"
-							onClick={() => setShowScheduleSession(true)}
-							className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent hover:opacity-90 transition cursor-pointer"
-						>
-							Schedule session
-						</button>
+					{isConsultant && (
+						<div className="flex items-center gap-2">
+							<button
+								type="button"
+								disabled={isRespondingBooking}
+								onClick={() => handleRespondBooking("accepted")}
+								className="rounded-lg bg-accent px-3 py-1 text-xs font-semibold text-on-accent hover:opacity-90 transition disabled:opacity-50 cursor-pointer"
+							>
+								{isRespondingBooking ? "Updating..." : "Accept Request"}
+							</button>
+							<button
+								type="button"
+								disabled={isRespondingBooking}
+								onClick={() => handleRespondBooking("declined")}
+								className="rounded-lg border border-border bg-base px-3 py-1 text-xs font-semibold text-text-body hover:bg-bg-soft transition disabled:opacity-50 cursor-pointer"
+							>
+								Decline
+							</button>
+						</div>
 					)}
 				</div>
-			</div>
+			)}
 
-			<div className="flex-1 overflow-y-auto px-4 py-6 space-y-6" id="chat-messages">
+			<div
+				ref={messagesContainerRef}
+				onScroll={handleMessagesScroll}
+				className="flex-1 overflow-y-auto overscroll-contain px-4 py-6 space-y-6"
+				id="chat-messages"
+			>
 				{messages.length === 0 ? (
 					<div className="flex flex-col items-center justify-center h-full text-center py-12">
 						<div className="w-14 h-14 rounded-2xl bg-bg-soft border border-border flex items-center justify-center mb-4">
@@ -318,7 +380,6 @@ export default function ChatPage() {
 					))
 				)}
 				{isOtherTyping && <TypingIndicator name={otherUserName || "They"} />}
-				<div ref={messagesEndRef} />
 			</div>
 
 			<div className="border-t border-border bg-base flex-shrink-0 px-4 py-3">
@@ -346,8 +407,7 @@ export default function ChatPage() {
 							placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
 							rows={1}
 							disabled={!isConnected}
-							className="w-full rounded-xl border border-border bg-bg-soft px-4 py-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent resize-none disabled:opacity-50 max-h-40"
-							style={{ height: "auto" }}
+							className="w-full rounded-xl border border-border bg-bg-soft px-4 py-3 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent resize-none disabled:opacity-50 max-h-40 overflow-y-auto"
 						/>
 					</div>
 					<button
@@ -375,29 +435,6 @@ export default function ChatPage() {
 				/>
 			)}
 
-			{showScheduleSession && booking && (
-				<ScheduleSessionModal
-					consultantId={booking.consultant_id}
-					bookingId={bookingId}
-					onClose={() => setShowScheduleSession(false)}
-					onDone={(session) => {
-						setSessions((prev) => [...prev, session]);
-						setShowScheduleSession(false);
-					}}
-				/>
-			)}
-
-			<CallModal
-				callState={call.callState}
-				callType={call.callType}
-				localStream={call.localStream}
-				remoteStream={call.remoteStream}
-				otherUserName={otherUserName || "Consulo user"}
-				error={call.error}
-				onAccept={() => call.acceptPendingCall()}
-				onReject={() => call.rejectCall()}
-				onEnd={() => call.endCall()}
-			/>
 		</div>
 	);
 }

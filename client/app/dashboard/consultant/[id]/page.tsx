@@ -3,10 +3,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getConsultantProfile, getMe, requestBookingWithSlot, getPublicReviewsForUser, type ConsultantProfile, type PublicUser, type PublicReview, type SessionMode } from "../../../_lib/api";
+import { getConsultantProfile, getMe, requestBooking, getPublicReviewsForUser, type ConsultantProfile, type PublicUser, type PublicReview } from "../../../_lib/api";
 import { RatingSummary } from "../../../_components/RatingSummary";
 import { ReviewCard } from "../../../_components/ReviewCard";
-import { SlotPicker } from "../../../_components/SlotPicker";
 
 export default function ConsultantProfilePage() {
 	const params = useParams();
@@ -27,9 +26,6 @@ export default function ConsultantProfilePage() {
 	const [isBooking, setIsBooking] = useState(false);
 	const [bookingSuccess, setBookingSuccess] = useState(false);
 	const [bookingError, setBookingError] = useState<string | null>(null);
-	const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-	const [sessionMode, setSessionMode] = useState<SessionMode>("online");
-	const [sessionLocation, setSessionLocation] = useState("");
 
 	useEffect(() => {
 		let isMounted = true;
@@ -60,20 +56,12 @@ export default function ConsultantProfilePage() {
 	async function handleBooking(e: React.FormEvent) {
 		e.preventDefault();
 		if (!bookingMessage.trim()) return;
-		if (selectedSlot && sessionMode === "offline" && !sessionLocation.trim()) {
-			setBookingError("Add a location for an in-person session.");
-			return;
-		}
-
 		setIsBooking(true);
 		setBookingError(null);
 		try {
-			await requestBookingWithSlot(
+			await requestBooking(
 				consultantId,
-				bookingMessage.trim(),
-				selectedSlot
-					? { startAt: selectedSlot, mode: sessionMode, location: sessionLocation.trim() }
-					: undefined
+				bookingMessage.trim()
 			);
 			setBookingSuccess(true);
 		} catch (err: any) {
@@ -250,9 +238,7 @@ export default function ConsultantProfilePage() {
 								<h3 className="mt-4 text-lg font-semibold text-text-primary">Request Sent!</h3>
 								<p className="mt-2 text-sm text-text-body">
 									Your consultation request has been sent to <strong>{profile.firstName}</strong>.{" "}
-									{selectedSlot
-										? "Your chosen time is held until they confirm."
-										: "You'll be notified once they respond."}
+									You'll be notified once they respond.
 								</p>
 								<div className="mt-6 flex gap-3 justify-center">
 									<button
@@ -296,48 +282,7 @@ export default function ConsultantProfilePage() {
 										/>
 									</div>
 
-									<div>
-										<label className="block text-xs font-semibold uppercase tracking-wider text-text-muted mb-1.5">
-											Propose a time <span className="normal-case tracking-normal text-text-muted">(optional)</span>
-										</label>
-										<SlotPicker
-											consultantId={consultantId}
-											value={selectedSlot}
-											onChange={setSelectedSlot}
-											emptyHint="This consultant hasn't published open times yet. Send your message and agree on a time in chat."
-										/>
-									</div>
 
-									{selectedSlot && (
-										<div className="space-y-3 rounded-xl border border-border bg-bg-soft p-4">
-											<div className="flex gap-2">
-												{(["online", "offline"] as SessionMode[]).map((option) => (
-													<button
-														key={option}
-														type="button"
-														onClick={() => setSessionMode(option)}
-														className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold transition cursor-pointer ${
-															sessionMode === option
-																? "border-accent bg-accent/10 text-accent"
-																: "border-border bg-base text-text-body hover:bg-bg-soft"
-														}`}
-													>
-														{option === "online" ? "Online call" : "In person"}
-													</button>
-												))}
-											</div>
-
-											{sessionMode === "offline" && (
-												<input
-													type="text"
-													value={sessionLocation}
-													onChange={(e) => setSessionLocation(e.target.value)}
-													placeholder="Office address or meeting point"
-													className="w-full rounded-lg border border-border bg-base px-3 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
-												/>
-											)}
-										</div>
-									)}
 
 									<div className="flex items-center justify-end gap-3 pt-1">
 										<button

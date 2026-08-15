@@ -2,24 +2,14 @@ import { v4 as uuidv4 } from "uuid";
 import { BookingRepository } from "./booking.repository";
 import { UserRepository } from "../user/user.repository";
 import { NotificationService } from "../notification/notification.service";
-import { SessionService } from "../scheduling/session.service";
-import { SessionMode } from "../scheduling/scheduling.model";
 import { ConsuloError } from "../../utils/errorHandler";
 
 const bookingRepo = new BookingRepository();
 const userRepo = new UserRepository();
 const notificationService = new NotificationService();
-const sessionService = new SessionService();
-
-export type ProposedSlot = {
-	startAt: string;
-	mode?: SessionMode;
-	location?: string;
-	agenda?: string;
-};
 
 export class BookingService {
-	async requestBooking(clientId: string, consultantId: string, message: string, proposedSlot?: ProposedSlot) {
+	async requestBooking(clientId: string, consultantId: string, message: string) {
 		if (clientId === consultantId) {
 			throw new ConsuloError(400, "You cannot book yourself.");
 		}
@@ -30,25 +20,8 @@ export class BookingService {
 		const id = uuidv4();
 		const booking = await bookingRepo.createBooking(id, clientId, consultantId, message);
 
-		// A first-contact request can carry a proposed time. The slot is held as a
-		// pending session and only becomes real when the consultant accepts.
-		let session = null;
-		if (proposedSlot?.startAt) {
-			try {
-				session = await sessionService.createPendingSessionForBooking(
-					booking.id,
-					clientId,
-					consultantId,
-					proposedSlot.startAt,
-					proposedSlot.mode,
-					proposedSlot.location,
-					proposedSlot.agenda
-				);
-			} catch (error) {
-				// Don't strand a booking whose slot was taken mid-request.
-				await bookingRepo.deleteBooking(booking.id);
-				throw error;
-			}
+		if (message && message.trim()) {
+			await bookingRepo.addMessage(uuidv4(), booking.id, clientId, message.trim());
 		}
 
 		const client = await userRepo.getUserById(clientId);
@@ -56,13 +29,11 @@ export class BookingService {
 			consultantId,
 			"booking_request",
 			"New consultation request",
-			session
-				? `${client?.firstName || "A client"} requested a consultation and proposed a time.`
-				: `${client?.firstName || "A client"} requested a consultation with you.`,
+			`${client?.firstName || "A client"} requested a consultation with you.`,
 			"/dashboard/bookings"
 		);
 
-		return { ...booking, session };
+		return booking;
 	}
 
 	async respondToBooking(bookingId: string, consultantId: string, action: "accepted" | "declined") {
@@ -72,21 +43,12 @@ export class BookingService {
 		if (booking.status !== "pending") throw new ConsuloError(400, "Booking is no longer pending.");
 		const updated = await bookingRepo.updateBookingStatus(bookingId, action);
 
-		// Any time proposed with the request rides on the answer: confirmed on
-		// accept, and the held slot handed back on decline.
-		const sessions =
-			action === "accepted"
-				? await sessionService.confirmPendingSessionsForBooking(bookingId)
-				: await sessionService.releasePendingSessionsForBooking(bookingId);
-
 		const consultant = await userRepo.getUserById(consultantId);
 		await notificationService.notify(
 			booking.clientId,
 			"booking_response",
 			`Booking ${action}`,
-			sessions.length > 0 && action === "accepted"
-				? `${consultant?.firstName || "The consultant"} accepted your request and confirmed your session.`
-				: `${consultant?.firstName || "The consultant"} ${action} your consultation request.`,
+			`${consultant?.firstName || "The consultant"} ${action} your consultation request.`,
 			"/dashboard/bookings"
 		);
 
@@ -102,12 +64,30 @@ export class BookingService {
 	}
 
 	async getChatHistory(bookingId: string, requesterId: string) {
-		const booking = await bookingRepo.getBookingById(bookingId);
+		const booking = await bookingRepo.getBookingByIdWithUsers(bookingId);
 		if (!booking) throw new ConsuloError(404, "Booking not found.");
-		if (booking.clientId !== requesterId && booking.consultantId !== requesterId) {
+		if (booking.client_id !== requesterId && booking.consultant_id !== requesterId) {
 			throw new ConsuloError(403, "Forbidden.");
 		}
-		const messages = await bookingRepo.getMessagesByBookingId(bookingId);
+		let messages = await bookingRepo.getMessagesByBookingId(bookingId);
+		if (messages.length === 0 && booking.message && String(booking.message).trim()) {
+			const initialMsg = await bookingRepo.addMessage(uuidv4(), bookingId, booking.client_id, String(booking.message).trim());
+			const sender = await userRepo.getUserById(booking.client_id);
+			messages = [{
+				id: initialMsg.id,
+				booking_id: initialMsg.bookingId,
+				sender_id: initialMsg.senderId,
+				content: initialMsg.content,
+				message_type: initialMsg.messageType,
+				file_url: initialMsg.fileUrl,
+				file_name: initialMsg.fileName,
+				created_at: initialMsg.createdAt,
+				first_name: sender?.firstName,
+				last_name: sender?.lastName,
+				username: sender?.username,
+				profile_picture: sender?.profilePicture
+			}];
+		}
 		return { booking, messages };
 	}
 

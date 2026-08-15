@@ -246,7 +246,7 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_at ON admin_audit_log(cre
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS session_duration_minutes INTEGER NOT NULL DEFAULT 60;
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS buffer_minutes INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS min_notice_hours INTEGER NOT NULL DEFAULT 12;
+ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS min_notice_hours INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS booking_horizon_days INTEGER NOT NULL DEFAULT 30;
 
 CREATE TABLE IF NOT EXISTS availability_rules (
@@ -324,3 +324,10 @@ EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'Skipping consultation_sessions_no_overlap exclusion constraint: %', SQLERRM;
 END
 $$;
+
+-- Scoring breakdown columns
+ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS assessment_score INTEGER;
+ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS cert_score INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE freelancer_profiles ADD COLUMN IF NOT EXISTS rating_score INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE freelancer_certifications ADD COLUMN IF NOT EXISTS score INTEGER NOT NULL DEFAULT 0;
+

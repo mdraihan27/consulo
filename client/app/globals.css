@@ -17,6 +17,12 @@
   /* Accent */
   --accent: #c4521a;
   --accent-soft: #e8b49a;
+
+  /* Sidebar */
+  --sidebar-width: 260px;
+  --sidebar-bg: #f5f3ef;
+  --sidebar-hover: #eae7e1;
+  --sidebar-active: #e4dfd8;
 }
 
 @theme inline {
@@ -35,6 +41,10 @@
   --color-accent-soft: var(--accent-soft);
   --color-on-accent: var(--base);
 
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
+
   --font-sans: var(--font-poppins);
   --font-mono: var(--font-geist-mono);
 }
@@ -42,4 +52,50 @@
 body {
   background: var(--base);
   color: var(--text-body);
+}
+
+/* Sidebar nav link transition */
+.sidebar-link {
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-link:hover {
+  background-color: var(--sidebar-hover);
+}
+.sidebar-link.active {
+  background-color: var(--sidebar-active);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Mobile sidebar overlay */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background-color: rgba(28, 43, 58, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.sidebar-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Sidebar slide animation */
+.sidebar-panel {
+  transition: transform 0.25s ease;
+}
+@media (max-width: 767px) {
+  .sidebar-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(-100%);
+  }
+  .sidebar-panel.open {
+    transform: translateX(0);
+  }
 }

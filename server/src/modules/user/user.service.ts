@@ -7,8 +7,9 @@ import { RandomGenerator } from "../../utils/randomGenerator";
 import { CloudinaryHandler } from "../../utils/cloudinaryHandler";
 import { AdminInviteService } from "../admin/adminInvite.service";
 import { ContractRepository } from "../contract/contract.repository";
+import { ReviewRepository } from "../review/review.repository";
 
-type PublicUser = {
+export type PublicUser = {
     id: string;
     username: string;
     email: string;
@@ -20,8 +21,11 @@ type PublicUser = {
     profilePicture?: string;
     title?: string;
     testScore?: number | null;
+    assessmentScore?: number | null;
+    certScore?: number;
+    ratingScore?: number;
     bookingsCount?: number;
-    certifications?: Array<{ id: string; name: string; url: string }>;
+    certifications?: Array<{ id: string; name: string; url: string; score?: number }>;
 };
 
 type GoogleProfile = {
@@ -45,6 +49,7 @@ type ProfilePatch = {
 class UserService{
     
     userRepository = new UserRepository();
+    reviewRepository = new ReviewRepository();
     regex = new Regex();
     encryptionHandler = new EncryptionHandler();
     randomGenerator = new RandomGenerator();
@@ -54,14 +59,20 @@ class UserService{
     private async toPublicUser(user: User): Promise<PublicUser> {
         let title: string | undefined = undefined;
         let testScore: number | null = null;
+        let assessmentScore: number | null = null;
+        let certScore = 0;
+        let ratingScore = 0;
         let bookingsCount = 0;
-        let certifications: Array<{ id: string; name: string; url: string }> = [];
+        let certifications: Array<{ id: string; name: string; url: string; score?: number }> = [];
 
         if (user.role === "freelancer") {
             const profile = await this.userRepository.getFreelancerProfileByUserId(user.id);
             if (profile) {
                 title = profile.title;
                 testScore = profile.test_score;
+                assessmentScore = profile.assessment_score;
+                certScore = profile.cert_score;
+                ratingScore = profile.rating_score;
             }
             bookingsCount = await this.contractRepository.getContractsCountByUserId(user.id, "freelancer");
             certifications = await this.userRepository.getCertificationsByUserId(user.id);
@@ -81,6 +92,9 @@ class UserService{
             profilePicture: user.profilePicture,
             title,
             testScore,
+            assessmentScore,
+            certScore,
+            ratingScore,
             bookingsCount,
             certifications
         };
@@ -109,13 +123,21 @@ class UserService{
 
 		const firstName = (profile.firstName || "").trim();
 		const lastName = (profile.lastName || "").trim();
+		const baseUsername = `${firstName}.${lastName}`.toLowerCase().replace(/[^a-z0-9._-]/g, "");
+		let username = baseUsername || "user";
+		let counter = 1;
+		while (await this.userRepository.getUserByUsername(username)) {
+			username = `${baseUsername || "user"}${counter++}`;
+		}
+
+		const id = this.randomGenerator.generateRandomString(32);
 		const grantedRole = await this.adminInviteService.resolveRoleForNewLogin(email);
 		const user = new User(
-			this.randomGenerator.generateRandomString(32),
+			id,
 			firstName,
 			lastName,
 			email,
-			this.randomGenerator.generateUserName(firstName || "user", lastName || ""),
+			username,
 			grantedRole ?? "user",
 			true,
 			"",
@@ -293,6 +315,130 @@ class UserService{
         await this.userRepository.updateFreelancerProfileScore(userId, score);
     }
 
+    async calculateRatingScore(userId: string): Promise<number> {
+        try {
+            const { average, count } = await this.reviewRepository.getAverageRatingForUser(userId);
+            if (!count || average === null) return 0;
+            return Math.min(20, Math.max(0, Math.round((average / 5.0) * 20)));
+        } catch {
+            return 0;
+        }
+    }
+
+    async evaluateCertificatesWithAI(field: string, certs: Array<{ id?: string; name: string; url: string }>): Promise<{ totalScore: number; feedback: string }> {
+        if (!certs || certs.length === 0) {
+            return { totalScore: 0, feedback: "No certifications provided." };
+        }
+
+        const openrouterApiKey = (process.env.OPENROUTER_API_KEY || "").trim();
+        const modelName = (process.env.OPENROUTER_MODEL || "google/gemma-2-27b-it").trim();
+
+        if (!openrouterApiKey) {
+            const totalScore = Math.min(30, certs.length * 10);
+            return {
+                totalScore,
+                feedback: `Evaluated ${certs.length} certificate(s).`
+            };
+        }
+
+        const certListText = certs.map((c, i) => `${i + 1}. Certificate Name: "${c.name}" (URL/File: ${c.url})`).join("\n");
+
+        try {
+            const apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${openrouterApiKey}`
+                },
+                body: JSON.stringify({
+                    model: modelName,
+                    messages: [
+                        {
+                            role: "user",
+                            content: `You are an expert credential and certification evaluator assessing a consultant specializing in the field of "${field}".
+Below are the candidate's ${certs.length} submitted professional certificate(s):
+${certListText}
+
+Evaluate how credible, recognized, prestigious, and relevant these certificates are for someone in the field of "${field}".
+Score the candidate's certificate portfolio on a scale from 0 to 30 (maximum 30 points).
+Scoring Guidelines:
+- 25 to 30: Industry-standard, gold-standard, or highly rigorous credentials (e.g. AWS Solutions Architect Pro, CISSP, PMP, Bar Exam, CFA, Board Certifications, CKA).
+- 15 to 24: Reputable mid-tier or associate certifications (e.g. CompTIA Security+/Network+, AWS Associate, Certified Scrum Master, Google Associate, Meta Professional).
+- 5 to 14: Introductory courses, online completion certificates, bootcamps (e.g. Coursera, Udemy, LinkedIn Learning).
+- 0 to 4: Unrecognized, trivial, or completely unrelated certificates.
+- Multiple legitimate certificates can combine to increase the score up to the maximum cap of 30.
+
+Return ONLY a JSON object in this exact format:
+{
+  "totalScore": <integer from 0 to 30>,
+  "feedback": "<1-2 sentence explanation of the credential evaluation>"
+}
+No extra text, markdown formatting or code blocks outside the JSON.`
+                        }
+                    ]
+                })
+            });
+
+            if (apiRes.ok) {
+                const json = (await apiRes.json()) as any;
+                const content = String(json.choices?.[0]?.message?.content || "").trim();
+                let clean = content;
+                if (clean.startsWith("```")) {
+                    const lines = clean.split("\n");
+                    if (lines[0].startsWith("```")) lines.shift();
+                    if (lines[lines.length - 1].startsWith("```")) lines.pop();
+                    clean = lines.join("\n").trim();
+                }
+                const parsed = JSON.parse(clean);
+                const score = typeof parsed.totalScore === "number" ? Math.min(30, Math.max(0, Math.round(parsed.totalScore))) : Math.min(30, certs.length * 10);
+                return {
+                    totalScore: score,
+                    feedback: parsed.feedback || "Certification portfolio reviewed."
+                };
+            }
+        } catch (e) {
+            console.error("AI Certificate evaluation error:", e);
+        }
+
+        return {
+            totalScore: Math.min(30, certs.length * 10),
+            feedback: `Evaluated ${certs.length} certificate(s).`
+        };
+    }
+
+    async recalculateFreelancerTotalScore(userId: string): Promise<number | null> {
+        const profile = await this.userRepository.getFreelancerProfileByUserId(userId);
+        if (!profile) return null;
+
+        const assessmentScore = profile.assessment_score;
+        if (assessmentScore === null) {
+            await this.userRepository.updateFreelancerProfileScores(userId, {
+                testScore: null,
+                assessmentScore: null
+            });
+            return null;
+        }
+
+        const certs = await this.userRepository.getCertificationsByUserId(userId);
+        let certScore = 0;
+        if (certs.length > 0) {
+            const evalResult = await this.evaluateCertificatesWithAI(profile.title, certs);
+            certScore = evalResult.totalScore;
+        }
+
+        const ratingScore = await this.calculateRatingScore(userId);
+        const totalScore = Math.min(100, Math.max(0, assessmentScore + certScore + ratingScore));
+
+        await this.userRepository.updateFreelancerProfileScores(userId, {
+            testScore: totalScore,
+            assessmentScore,
+            certScore,
+            ratingScore
+        });
+
+        return totalScore;
+    }
+
     async resetFreelancerAssessment(userId: string): Promise<PublicUser> {
         if (!userId) {
             throw new ConsuloError(406, "User ID is required");
@@ -304,7 +450,7 @@ class UserService{
         if (user.role !== "freelancer") {
             throw new ConsuloError(400, "Only consultants can reset the AI assessment");
         }
-        await this.userRepository.updateFreelancerProfileScore(userId, null);
+        await this.userRepository.resetFreelancerAssessmentScore(userId);
         return await this.toPublicUser(user);
     }
 
@@ -331,7 +477,7 @@ class UserService{
         }));
     }
 
-    async addCertification(userId: string, name: string, url?: string, imageBase64?: string): Promise<{ id: string; name: string; url: string }> {
+    async addCertification(userId: string, name: string, url?: string, imageBase64?: string): Promise<{ id: string; name: string; url: string; score: number }> {
         if (!userId) {
             throw new ConsuloError(406, "User ID is required");
         }
@@ -354,7 +500,11 @@ class UserService{
         }
 
         const id = this.randomGenerator.generateRandomString(32);
-        return await this.userRepository.addCertification(id, userId, name.trim(), finalUrl);
+        const cert = await this.userRepository.addCertification(id, userId, name.trim(), finalUrl, 0);
+
+        await this.recalculateFreelancerTotalScore(userId);
+
+        return cert;
     }
 
     async deleteCertification(userId: string, certificationId: string): Promise<void> {
@@ -368,6 +518,8 @@ class UserService{
         if (!deleted) {
             throw new ConsuloError(404, "Certification not found");
         }
+
+        await this.recalculateFreelancerTotalScore(userId);
     }
 
     async generateAssessmentQuestions(userId: string): Promise<string[]> {
@@ -385,7 +537,7 @@ class UserService{
         const modelName = (process.env.OPENROUTER_MODEL || "google/gemma-2-27b-it").trim();
 
         if (!openrouterApiKey) {
-            return Array.from({ length: 20 }, (_, i) => `Tough Question ${i + 1} for ${field}: Describe your advanced experience and strategy in this area.`);
+            return Array.from({ length: 20 }, (_, i) => `Medium Question ${i + 1} for ${field}: Describe your practical experience and approach in this area.`);
         }
 
         const apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -399,7 +551,7 @@ class UserService{
                 messages: [
                     {
                         role: "user",
-                        content: `Generate exactly 20 professional, and specific assessment questions for a candidate specializing in the field of "${field}". The questions should assess technical or practical knowledge. Return the questions as a JSON array of strings, like this: ["Question 1", "Question 2", ...]. Return ONLY the JSON array, no extra text, explanations, markdown blocks, or formatting.`
+                        content: `Generate exactly 20 professional, medium-difficulty assessment questions for a candidate specializing in the field of "${field}". The questions should be moderate in complexity—not overly hard, deep-niche, or tricky, but assessing standard practical knowledge and core industry practices. Return the questions as a JSON array of strings, like this: ["Question 1", "Question 2", ...]. Return ONLY the JSON array, no extra text, explanations, markdown blocks, or formatting.`
                     }
                 ]
             })
@@ -435,13 +587,13 @@ class UserService{
         }
 
         if (!Array.isArray(questions) || questions.length === 0) {
-            questions = Array.from({ length: 20 }, (_, i) => `Tough Question ${i + 1} for ${field}: Describe your advanced experience and strategy in this area.`);
+            questions = Array.from({ length: 20 }, (_, i) => `Medium Question ${i + 1} for ${field}: Describe your practical experience and approach in this area.`);
         }
 
         return questions;
     }
 
-    async gradeAssessment(userId: string, answers: Array<{ question: string; answer: string }>): Promise<{ score: number; feedback: string }> {
+    async gradeAssessment(userId: string, answers: Array<{ question: string; answer: string }>): Promise<{ score: number; totalScore: number; feedback: string }> {
         if (!userId) {
             throw new ConsuloError(406, "User ID is required");
         }
@@ -458,7 +610,7 @@ class UserService{
         const openrouterApiKey = (process.env.OPENROUTER_API_KEY || "").trim();
         const modelName = (process.env.OPENROUTER_MODEL || "google/gemma-2-27b-it").trim();
 
-        let score = 75;
+        let questionnaireScore = 38; // out of 50
         let feedback = "Answers submitted successfully.";
 
         if (openrouterApiKey) {
@@ -474,7 +626,7 @@ class UserService{
                     messages: [
                         {
                             role: "user",
-                            content: `You are an expert interviewer evaluating a candidate for a position in the field of "${field}". Below are 20 questions asked to the candidate, along with their answers. Grade their performance overall and output an integer score out of 100.\n\nQuestions and Answers:\n${qaText}\n\nProvide your evaluation as a JSON object with two fields:\n1. "score": a single integer from 0 to 100 representing the grade.\n2. "feedback": a short paragraph (2-3 sentences) explaining the grade.\n\nReturn ONLY the raw JSON object. Do not include any markdown fences or explanation outside the JSON.`
+                            content: `You are an expert interviewer evaluating a candidate for a position in the field of "${field}". Below are 20 questions asked to the candidate, along with their answers. Grade their performance overall and output an integer score out of 50 (this questionnaire contributes 50% to their overall score).\n\nQuestions and Answers:\n${qaText}\n\nProvide your evaluation as a JSON object with two fields:\n1. "score": a single integer from 0 to 50 representing the questionnaire grade.\n2. "feedback": a short paragraph (2-3 sentences) explaining the grade.\n\nReturn ONLY the raw JSON object. Do not include any markdown fences or explanation outside the JSON.`
                         }
                     ]
                 })
@@ -493,7 +645,7 @@ class UserService{
                     }
                     const parsed = JSON.parse(clean);
                     if (typeof parsed.score === "number") {
-                        score = parsed.score;
+                        questionnaireScore = Math.min(50, Math.max(0, Math.round(parsed.score)));
                     }
                     if (parsed.feedback) {
                         feedback = parsed.feedback;
@@ -505,7 +657,7 @@ class UserService{
                         try {
                             const parsed = JSON.parse(content.slice(start, end + 1));
                             if (typeof parsed.score === "number") {
-                                score = parsed.score;
+                                questionnaireScore = Math.min(50, Math.max(0, Math.round(parsed.score)));
                             }
                             if (parsed.feedback) {
                                 feedback = parsed.feedback;
@@ -519,13 +671,18 @@ class UserService{
             }
         } else {
             const totalLength = answers.reduce((sum, a) => sum + String(a.answer || "").length, 0);
-            score = Math.min(100, Math.max(30, Math.floor(totalLength / 50) + 40));
+            questionnaireScore = Math.min(50, Math.max(15, Math.floor(totalLength / 100) + 20));
             feedback = "Evaluation completed using mock assessor (no API key provided).";
         }
 
-        await this.updateFreelancerScore(userId, score);
+        await this.userRepository.updateFreelancerProfileScores(userId, {
+            testScore: questionnaireScore,
+            assessmentScore: questionnaireScore
+        });
 
-        return { score, feedback };
+        const totalScore = (await this.recalculateFreelancerTotalScore(userId)) || questionnaireScore;
+
+        return { score: questionnaireScore, totalScore, feedback };
     }
 }
 

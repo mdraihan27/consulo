@@ -59,6 +59,11 @@ export function useChatSocket({
 			socket.emit("join_booking", { bookingId });
 		});
 
+		if (socket.connected) {
+			setIsConnected(true);
+			socket.emit("join_booking", { bookingId });
+		}
+
 		socket.on("disconnect", () => setIsConnected(false));
 		socket.on("joined", (data: { bookingId: string; otherUserOnline: boolean }) => callbacksRef.current.onPresenceUpdate?.(null, data.otherUserOnline));
 		socket.on("presence_update", (data: { userId: string; isOnline: boolean }) => callbacksRef.current.onPresenceUpdate?.(data.userId, data.isOnline));

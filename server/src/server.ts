@@ -5,9 +5,11 @@ import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import app from "./app";
 import { setupSocketIO } from "./socket";
-import { startSessionSweeper } from "./modules/scheduling/sessionSweeper";
+import { initDb } from "./config/db";
 
 const PORT = Number(process.env.PORT) || 4000;
+
+initDb();
 
 const httpServer = http.createServer(app);
 
@@ -19,8 +21,6 @@ const io = new SocketIOServer(httpServer, {
 });
 
 setupSocketIO(io);
-
-startSessionSweeper();
 
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

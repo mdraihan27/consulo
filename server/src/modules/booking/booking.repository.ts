@@ -33,6 +33,29 @@ export class BookingRepository {
 		return this.mapRowToBooking(result.rows[0]);
 	}
 
+	async getBookingByIdWithUsers(id: string): Promise<any | null> {
+		const result = await pool.query({
+			text: `SELECT b.*,
+				cl.first_name AS client_first_name,
+				cl.last_name AS client_last_name,
+				cl.username AS client_username,
+				cl.profile_picture AS client_profile_picture,
+				co.first_name AS consultant_first_name,
+				co.last_name AS consultant_last_name,
+				co.username AS consultant_username,
+				co.profile_picture AS consultant_profile_picture,
+				fp.title AS consultant_title
+			FROM bookings b
+			JOIN users cl ON cl.id = b.client_id
+			JOIN users co ON co.id = b.consultant_id
+			LEFT JOIN freelancer_profiles fp ON fp.user_id = co.id
+			WHERE b.id = $1`,
+			values: [id]
+		});
+		if (!result.rows[0]) return null;
+		return result.rows[0];
+	}
+
 	async updateBookingStatus(id: string, status: BookingStatus): Promise<Booking | null> {
 		const result = await pool.query({
 			text: "UPDATE bookings SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
@@ -161,7 +184,7 @@ export class BookingRepository {
 				LIMIT 1
 			) lm ON true
 			LEFT JOIN booking_read_receipts rr ON rr.booking_id = b.id AND rr.user_id = $1
-			WHERE (b.client_id=$1 OR b.consultant_id=$1) AND b.status IN ('accepted', 'completed')
+			WHERE (b.client_id=$1 OR b.consultant_id=$1) AND b.status IN ('pending', 'accepted', 'completed')
 			ORDER BY COALESCE(lm.created_at, b.created_at) DESC`,
 			values: [userId]
 		});

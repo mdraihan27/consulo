@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getMe, logout, updateUserRole, getAssessmentQuestions, submitAssessment, retakeAssessment, addCertification, deleteCertification, getConsultantBookings, type PublicUser } from "../_lib/api";
 import { ConsultantSearch } from "../_components/ConsultantSearch";
-import { AvailabilityEditor } from "../_components/AvailabilityEditor";
-import { NotificationBell } from "../_components/NotificationBell";
 
 type UserRole = "freelancer" | "client";
 
@@ -80,7 +78,7 @@ export default function DashboardPage() {
 	const [questions, setQuestions] = useState<string[]>([]);
 	const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 	const [answers, setAnswers] = useState<string[]>([]);
-	const [scoreResult, setScoreResult] = useState<{ score: number; feedback: string } | null>(null);
+	const [scoreResult, setScoreResult] = useState<{ score: number; totalScore?: number; feedback: string } | null>(null);
 	const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
 	const [showRetakeConfirm, setShowRetakeConfirm] = useState(false);
 	const [isRetaking, setIsRetaking] = useState(false);
@@ -95,9 +93,6 @@ export default function DashboardPage() {
 	const [isAddingCert, setIsAddingCert] = useState(false);
 	const [certError, setCertError] = useState<string | null>(null);
 
-	// Notification badge for pending bookings (consultant)
-	const [pendingBookingCount, setPendingBookingCount] = useState(0);
-
 	useEffect(() => {
 		let isMounted = true;
 		(async () => {
@@ -111,14 +106,8 @@ export default function DashboardPage() {
 						return;
 					}
 					setUser(me);
-					if (me.role === "freelancer") {
-						try {
-							const bookings = await getConsultantBookings();
-							const pending = bookings.filter((b) => b.status === "pending").length;
-							if (isMounted) setPendingBookingCount(pending);
-						} catch { /* non-critical */ }
 					}
-				}
+
 			} catch (e: any) {
 				if (!isMounted) return;
 				setUser(null);
@@ -132,10 +121,7 @@ export default function DashboardPage() {
 		};
 	}, []);
 
-	async function onLogout() {
-		await logout();
-		router.push("/login");
-	}
+
 
 	async function onChooseRole(role: UserRole, title?: string) {
 		setSavingRole(role);
@@ -294,88 +280,7 @@ export default function DashboardPage() {
 			: "";
 
 	return (
-		<div className="flex min-h-dvh flex-col bg-bg">
-			<header className="border-b border-border bg-base">
-				<div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4">
-					<div className="flex items-center gap-4">
-						<Link href="/" className="inline-flex items-center">
-							<img
-								src="/assets/images/logo.svg"
-								alt="Consulo"
-								className="h-6 w-auto"
-							/>
-						</Link>
-						<span className="text-sm text-text-muted">Dashboard</span>
-					</div>
-					<nav className="flex items-center gap-3 text-sm">
-						{user?.role && user.role !== "user" && <NotificationBell />}
-						{user?.role && user.role !== "user" && (
-							<Link
-								href="/dashboard/inbox"
-								className="rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft"
-							>
-								Inbox
-							</Link>
-						)}
-						{user?.role && user.role !== "user" && (
-							<Link
-								href="/dashboard/bookings"
-								className="relative rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft"
-							>
-								Bookings
-								{pendingBookingCount > 0 && (
-									<span className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-on-accent">
-										{pendingBookingCount > 9 ? "9+" : pendingBookingCount}
-									</span>
-								)}
-							</Link>
-						)}
-						{user?.role && user.role !== "user" && (
-							<Link
-								href="/dashboard/sessions"
-								className="rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft"
-							>
-								Sessions
-							</Link>
-						)}
-						{user?.role && user.role !== "user" && (
-							<Link
-								href="/dashboard/contracts"
-								className="rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft"
-							>
-								Contracts
-							</Link>
-						)}
-						{user?.role === "client" && (
-							<Link
-								href="/dashboard/favorites"
-								className="rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft"
-							>
-								Favorites
-							</Link>
-						)}
-						{user?.role && user.role !== "user" && (
-							<Link
-								href="/dashboard/profile"
-								className="rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft"
-							>
-								Profile
-							</Link>
-						)}
-						<button
-							type="button"
-							onClick={onLogout}
-							className="rounded-md border border-border-strong px-3 py-2 font-medium text-text-primary hover:bg-bg-soft cursor-pointer"
-						>
-							Log out
-						</button>
-					</nav>
-				</div>
-			</header>
-
-			<main className="flex-1">
-				<div className="mx-auto w-full max-w-5xl px-6 py-10">
-				
+		<div className="mx-auto w-full max-w-5xl px-6 py-10">
 				
 					{isLoading ? (
 						<div className="mt-6 rounded-lg border border-border bg-base p-5 text-sm text-text-muted">
@@ -638,23 +543,39 @@ export default function DashboardPage() {
 							)}
 
 							{assessmentStep === "result" && scoreResult && (
-								<div className="max-w-md mx-auto rounded-lg border border-border bg-base p-6 text-center">
+								<div className="max-w-lg mx-auto rounded-lg border border-border bg-base p-6 text-center">
 									<p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-muted font-bold">
 										Grading Complete
 									</p>
 									
-									<div className="mt-6 inline-flex flex-col items-center justify-center w-32 h-32 rounded-full border-4 border-accent bg-bg-soft">
-										<span className="text-4xl font-extrabold text-text-primary">{scoreResult.score}</span>
-										<span className="text-xs font-semibold text-text-muted mt-1">out of 100</span>
+									<div className="mt-6 flex items-center justify-center gap-6">
+										<div className="inline-flex flex-col items-center justify-center w-28 h-28 rounded-full border-4 border-accent bg-bg-soft">
+											<span className="text-3xl font-extrabold text-text-primary">{scoreResult.score}</span>
+											<span className="text-[11px] font-semibold text-text-muted">/ 50 pts</span>
+										</div>
+										<div className="text-left">
+											<p className="text-xs font-semibold uppercase tracking-wider text-text-muted">Total Score</p>
+											<p className="text-2xl font-bold text-text-primary">{scoreResult.totalScore ?? scoreResult.score}/100</p>
+											<p className="text-xs text-text-muted mt-1">50% Questionnaire · 30% Certs · 20% Ratings</p>
+										</div>
 									</div>
 
 									<h3 className="mt-6 text-lg font-semibold text-text-primary">
-										{scoreResult.score >= 70 ? "Congratulations, you passed!" : "Assessment Review Completed"}
+										{scoreResult.score >= 35 ? "Congratulations, you passed!" : "Assessment Review Completed"}
 									</h3>
 									
 									<p className="mt-3 text-sm leading-relaxed text-text-body bg-bg-soft p-4 rounded-md text-left">
 										<strong>Feedback:</strong> {scoreResult.feedback}
 									</p>
+
+									<div className="mt-4 rounded-md border border-border bg-bg-soft p-3 text-xs text-text-muted text-left">
+										<p className="font-semibold text-text-primary mb-1">How your Expertise Score is composed:</p>
+										<ul className="list-disc pl-4 space-y-0.5">
+											<li><strong>Questionnaire (50% max):</strong> {scoreResult.score}/50 points earned.</li>
+											<li><strong>Certifications (30% max):</strong> Upload credentials to earn up to 30 points.</li>
+											<li><strong>Client Ratings (20% max):</strong> 5-star reviews contribute up to 20 points.</li>
+										</ul>
+									</div>
 
 									<button
 										type="button"
@@ -686,22 +607,40 @@ export default function DashboardPage() {
 
 								{user?.role === "freelancer" && user?.testScore !== null && user?.testScore !== undefined && (
 									<div className="rounded-lg border border-border bg-base p-5">
-										<p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-muted font-bold">
-											Expertise Score
-										</p>
+										<div className="flex items-center justify-between">
+											<p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-muted font-bold">
+												Expertise Score
+											</p>
+											<span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/20">
+												AI Verified
+											</span>
+										</div>
 										<p className="mt-2 text-2xl font-semibold tracking-tight text-text-primary">
 											{user?.testScore}/100
 										</p>
-										<p className="mt-1 text-sm text-text-body">verified by AI</p>
+										<div className="mt-2 space-y-1 text-xs text-text-muted">
+											<div className="flex justify-between">
+												<span>Test (50%):</span>
+												<strong className="text-text-primary">{user?.assessmentScore ?? 0}/50</strong>
+											</div>
+											<div className="flex justify-between">
+												<span>Certs (30%):</span>
+												<strong className="text-text-primary">{user?.certScore ?? 0}/30</strong>
+											</div>
+											<div className="flex justify-between">
+												<span>Reviews (20%):</span>
+												<strong className="text-text-primary">{user?.ratingScore ?? 0}/20</strong>
+											</div>
+										</div>
 										<button
 											type="button"
 											onClick={() => {
 												setError(null);
 												setShowRetakeConfirm(true);
 											}}
-											className="mt-4 inline-flex h-9 items-center justify-center rounded-md border border-border-strong px-3 text-xs font-semibold text-text-primary hover:bg-bg-soft cursor-pointer"
+											className="mt-3 inline-flex h-8 w-full items-center justify-center rounded-md border border-border-strong px-2 text-xs font-semibold text-text-primary hover:bg-bg-soft cursor-pointer"
 										>
-											Retake AI Assessment
+											Retake Assessment
 										</button>
 									</div>
 								)}
@@ -735,12 +674,19 @@ export default function DashboardPage() {
 
 							{user?.role === "freelancer" && user?.testScore !== null && user?.testScore !== undefined && (
 								<div className="mt-6 rounded-lg border border-border bg-base p-6 shadow-sm">
-									<h2 className="text-lg font-semibold tracking-tight text-text-primary">
-										Certifications & Credentials
-									</h2>
-									<p className="mt-1 text-sm text-text-body">
-										Manage your credentials. Add links or upload certificate images.
-									</p>
+									<div className="flex items-center justify-between flex-wrap gap-2">
+										<div>
+											<h2 className="text-lg font-semibold tracking-tight text-text-primary">
+												Certifications & Credentials
+											</h2>
+											<p className="mt-1 text-sm text-text-body">
+												Certificates are evaluated by AI for credibility and relevance (contributes up to 30 points).
+											</p>
+										</div>
+										<span className="rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent">
+											Score Contribution: {user?.certScore ?? 0}/30 pts
+										</span>
+									</div>
 
 									{user?.certifications && user.certifications.length > 0 ? (
 										<div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -861,23 +807,11 @@ export default function DashboardPage() {
 								</div>
 							)}
 
-							{user?.role === "freelancer" && user?.testScore !== null && user?.testScore !== undefined && (
-							<div className="mt-6">
-								<h2 className="text-lg font-semibold tracking-tight text-text-primary">Availability</h2>
-								<p className="mt-1 mb-4 text-sm text-text-body">
-									Publish the hours you take consultations. Clients book directly into these slots.
-								</p>
-								<AvailabilityEditor />
-							</div>
-						)}
-
 						{user?.role === "client" && <ConsultantSearch />}
 
 
 						</>
 					)}
-				</div>
-			</main>
 
 			{showRetakeConfirm && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-text-primary/50 px-4">
